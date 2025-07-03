@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional
-from .models import UserRole
+from .models import UserRole, QuestStatus
 
 class UserCreate(BaseModel):
     username: str
@@ -35,6 +35,24 @@ class UserInfo(BaseModel):
     email: str
     is_active: bool
     role: UserRole
+    xp: int
+    level: int
+
+class LevelProgress(BaseModel):
+    current_level: int
+    current_xp: int
+    xp_in_current_level: int
+    xp_for_next_level: int
+    progress_percentage: float
+    is_max_level: bool
+
+class QuestCompletionResponse(BaseModel):
+    quest: dict
+    xp_gained: int
+    levels_gained: int
+    new_xp: int
+    new_level: int
+    level_progress: LevelProgress
 
 class TaskCreate(BaseModel):
     title: str
@@ -55,5 +73,58 @@ class TaskOut(BaseModel):
     owner_id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
+
+# Quests
+class QuestCreate(BaseModel):
+    title: str
+    description: str
+    xp: int
+    task_id: Optional[int] = None  # Optional task relationship
+    
+    # Quest type flags
+    is_daily: bool = False
+    is_hidden: bool = False
+    is_penalty: bool = False
+    is_timed: bool = False
+    
+    # Time-based fields
+    earliest_completion_time: Optional[datetime] = None
+    completion_deadline: Optional[datetime] = None
+    earliest_acceptance_time: Optional[datetime] = None
+    acceptance_deadline: Optional[datetime] = None
+    time_limit_minutes: Optional[int] = None
+
+class QuestUpdate(BaseModel):
+    status: Optional[QuestStatus] = None
+
+class QuestOut(BaseModel):
+    id: int
+    title: str
+    description: str
+    xp: int
+    created_at: datetime
+    status: QuestStatus
+    owner_id: int
+    task_id: Optional[int]  # Optional task relationship
+    
+    # Quest type flags
+    is_daily: bool
+    is_hidden: bool
+    is_penalty: bool
+    is_timed: bool
+    
+    # Time-based fields
+    earliest_completion_time: Optional[datetime]
+    completion_deadline: Optional[datetime]
+    earliest_acceptance_time: Optional[datetime]
+    acceptance_deadline: Optional[datetime]
+    time_limit_minutes: Optional[int]
+    
+    # Quest state timestamps
+    accepted_at: Optional[datetime]
+    completed_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
 

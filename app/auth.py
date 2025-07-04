@@ -5,7 +5,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from passlib.context import CryptContext
 import os
 from dotenv import load_dotenv
-from .models import UserRole
+from .models import UserRole, User
+from .database import get_db
+from sqlalchemy.orm import Session
 
 load_dotenv()
 
@@ -40,6 +42,49 @@ def create_refresh_token(data: dict, expires_delta: timedelta | None = None):
     to_encode.update({"exp": expire, "type": "refresh"})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    """Get current user from token"""
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        token_type: str = payload.get("type")
+        
+        if username is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Ensure this is an access token
+        if token_type != "access":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Get user from database
+        user = db.query(User).filter(User.username == username).first()
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        return user
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Verify access token from Bearer header"""
@@ -142,6 +187,10 @@ def verify_refresh_token(token: str):
 
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt"""
+    return myctx.hash(password)
+
+def get_password_hash(password: str) -> str:
+    """Hash a password using bcrypt (alias for hash_password)"""
     return myctx.hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

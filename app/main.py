@@ -3,9 +3,13 @@ from fastapi.security import HTTPBearer
 from app.database import engine
 from app.models import Base
 from app.routes import users, protected, admin, tasks, quests
+from app.scheduler import start_scheduler, stop_scheduler
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# Start the quest scheduler
+start_scheduler()
 
 # Create FastAPI app
 app = FastAPI(

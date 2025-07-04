@@ -1,13 +1,58 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from .models import UserRole, QuestStatus
 
-class UserCreate(BaseModel):
+class DailyQuestTask(BaseModel):
+    title: str
+    description: str
+    
+    class Config:
+        from_attributes = True
+
+class DailyQuestTasks(BaseModel):
+    tasks: List[DailyQuestTask]
+    
+    class Config:
+        from_attributes = True
+
+class UserBase(BaseModel):
     username: str
-    email: str
+    email: EmailStr
+
+class UserCreate(UserBase):
     password: str
-    role: UserRole = UserRole.USER
+
+class UserUpdate(BaseModel):
+    username: Optional[str] = None
+    email: Optional[EmailStr] = None
+    daily_quest_time: Optional[datetime] = None
+    daily_quest_tasks: Optional[List[DailyQuestTask]] = None
+
+class UserSchema(UserBase):
+    id: int
+    is_active: bool
+    role: UserRole
+    xp: int
+    level: int
+    daily_quest_time: Optional[datetime] = None
+    daily_quest_tasks: Optional[List[DailyQuestTask]] = None
+    
+    # Cached Statistics
+    total_quests_created: int
+    total_quests_completed: int
+    total_quests_failed: int
+    total_tasks_created: int
+    total_tasks_completed: int
+    total_xp_earned: int
+    daily_quests_completed: int
+    penalty_quests_completed: int
+    timed_quests_completed: int
+    hidden_quests_completed: int
+    stats_updated_at: datetime
+    
+    class Config:
+        from_attributes = True
 
 class UserLogin(BaseModel):
     username: str

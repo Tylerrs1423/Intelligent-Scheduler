@@ -1,4 +1,4 @@
-from sqlalchemy import String, Integer, Boolean, Enum, ForeignKey, DateTime
+from sqlalchemy import String, Integer, Boolean, Enum, ForeignKey, DateTime, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 import enum
@@ -17,6 +17,13 @@ class QuestStatus(str, enum.Enum):
     EXPIRED = "expired"
     FAILED = "failed"
 
+class QuestType(str, enum.Enum):
+    REGULAR = "regular"
+    DAILY = "daily"
+    HIDDEN = "hidden"
+    PENALTY = "penalty"
+    TIMED = "timed"
+
 class User(Base):
     __tablename__ = "users"
     
@@ -30,6 +37,27 @@ class User(Base):
     # XP and Leveling system
     xp: Mapped[int] = mapped_column(Integer, default=0)
     level: Mapped[int] = mapped_column(Integer, default=1)
+    
+    # Daily quest preferences
+    daily_quest_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    daily_quest_tasks: Mapped[Optional[str]] = mapped_column(JSON, nullable=True)  # Store as JSON array
+    
+    # Cached Statistics (updated incrementally)
+    total_quests_created: Mapped[int] = mapped_column(Integer, default=0)
+    total_quests_completed: Mapped[int] = mapped_column(Integer, default=0)
+    total_quests_failed: Mapped[int] = mapped_column(Integer, default=0)
+    total_tasks_created: Mapped[int] = mapped_column(Integer, default=0)
+    total_tasks_completed: Mapped[int] = mapped_column(Integer, default=0)
+    total_xp_earned: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # Quest type counters
+    daily_quests_completed: Mapped[int] = mapped_column(Integer, default=0)
+    penalty_quests_completed: Mapped[int] = mapped_column(Integer, default=0)
+    timed_quests_completed: Mapped[int] = mapped_column(Integer, default=0)
+    hidden_quests_completed: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # Last updated timestamp for stats
+    stats_updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     
     tasks = relationship("Task", back_populates="owner")
     quests = relationship("Quest", back_populates="owner")
@@ -51,19 +79,15 @@ class Quest(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     title: Mapped[str] = mapped_column(String)
     description: Mapped[str] = mapped_column(String)
-    xp: Mapped[int] = mapped_column(Integer)
+    xp_reward: Mapped[int] = mapped_column(Integer)  # Renamed from xp to xp_reward
     
-    # Quest type flags (can be multiple types)
-    is_daily: Mapped[bool] = mapped_column(Boolean, default=False)
-    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
-    is_penalty: Mapped[bool] = mapped_column(Boolean, default=False)
-    is_timed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Quest type (single type instead of multiple boolean flags)
+    quest_type: Mapped[str] = mapped_column(Enum(QuestType), default=QuestType.REGULAR)
     
     # Time-based fields
-    earliest_completion_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    completion_deadline: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    earliest_acceptance_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    acceptance_deadline: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    deadline: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    earliest_acceptance: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    earliest_completion: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     time_limit_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # For timed quests
     
     # Quest state timestamps

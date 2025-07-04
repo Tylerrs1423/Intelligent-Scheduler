@@ -4,6 +4,8 @@ Handles XP calculations, level progression, and quest rewards
 """
 
 from typing import Tuple
+from sqlalchemy.orm import Session
+from datetime import datetime
 
 # Leveling constants
 BASE_XP_PER_LEVEL = 100
@@ -23,7 +25,7 @@ def calculate_xp_for_level(level: int) -> int:
     # Level 2->3: 200 XP  
     # Level 3->4: 300 XP
     # etc.
-    return BASE_XP_PER_LEVEL * level 
+    return sum(BASE_XP_PER_LEVEL * i for i in range(1, level))
 
 def calculate_level_from_xp(xp: int) -> int:
     """
@@ -131,4 +133,98 @@ def get_level_progress(current_xp: int) -> dict:
         "xp_for_next_level": xp_needed_for_next,
         "progress_percentage": round(progress_percentage, 2),
         "is_max_level": current_level >= MAX_LEVEL
+    }
+
+# Statistics update functions
+def update_user_stats_on_quest_created(db: Session, user_id: int):
+    """Increment quest creation counter when a new quest is created"""
+    from .models import User
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.total_quests_created += 1
+        user.stats_updated_at = datetime.utcnow()
+        db.commit()
+
+def update_user_stats_on_quest_completed(db: Session, user_id: int, quest_xp: int, quest_type: str, is_penalty: bool = False):
+    """Update user stats when a quest is completed"""
+    from .models import User
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        # Update completion counters
+        user.total_quests_completed += 1
+        user.total_xp_earned += quest_xp
+        
+        # Update quest type counters
+        if quest_type == "daily":
+            user.daily_quests_completed += 1
+        elif is_penalty:
+            user.penalty_quests_completed += 1
+        
+        user.stats_updated_at = datetime.utcnow()
+        db.commit()
+
+def update_user_stats_on_quest_failed(db: Session, user_id: int):
+    """Update user stats when a quest fails"""
+    from .models import User
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.total_quests_failed += 1
+        user.stats_updated_at = datetime.utcnow()
+        db.commit()
+
+def update_user_stats_on_task_created(db: Session, user_id: int):
+    """Increment task creation counter when a new task is created"""
+    from .models import User
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.total_tasks_created += 1
+        user.stats_updated_at = datetime.utcnow()
+        db.commit()
+
+def update_user_stats_on_task_completed(db: Session, user_id: int):
+    """Update user stats when a task is completed"""
+    from .models import User
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.total_tasks_completed += 1
+        user.stats_updated_at = datetime.utcnow()
+        db.commit()
+
+def get_user_stats_from_cache(user) -> dict:
+    """
+    Get user statistics from cached database fields.
+    Much faster than calculating from scratch.
+    """
+    return {
+        "user_info": {
+            "username": user.username,
+            "level": user.level,
+            "xp": user.xp,
+            "level_progress": get_level_progress(user.xp)
+        },
+        "quest_statistics": {
+            "total_quests": user.total_quests_created,
+            "completed_quests": user.total_quests_completed,
+            "failed_quests": user.total_quests_failed,
+            "completion_rate": round((user.total_quests_completed / user.total_quests_created * 100) if user.total_quests_created > 0 else 0, 2),
+            "quest_types": {
+                "daily": user.daily_quests_completed,
+                "penalty": user.penalty_quests_completed,
+                "timed": user.timed_quests_completed,
+                "hidden": user.hidden_quests_completed,
+                "regular": user.total_quests_completed - user.daily_quests_completed - user.penalty_quests_completed - user.timed_quests_completed - user.hidden_quests_completed
+            }
+        },
+        "task_statistics": {
+            "total_tasks": user.total_tasks_created,
+            "completed_tasks": user.total_tasks_completed,
+            "pending_tasks": user.total_tasks_created - user.total_tasks_completed,
+            "completion_rate": round((user.total_tasks_completed / user.total_tasks_created * 100) if user.total_tasks_created > 0 else 0, 2)
+        },
+        "xp_statistics": {
+            "total_xp_earned": user.total_xp_earned,
+            "avg_xp_per_quest": round(user.total_xp_earned / user.total_quests_completed, 2) if user.total_quests_completed > 0 else 0,
+            "total_xp_from_quests": user.total_xp_earned
+        },
+        "stats_last_updated": user.stats_updated_at
     } 

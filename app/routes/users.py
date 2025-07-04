@@ -4,8 +4,8 @@ from datetime import timedelta, datetime
 from sqlalchemy import func
 
 from ..database import get_db
-from ..models import User, Quest, Task, QuestStatus
-from ..schemas import UserCreate, RefreshTokenRequest, UserInfo, UserLogin, TokenResponse, LevelProgress
+from ..models import User, Quest, Task, QuestStatus, UserRole
+from ..schemas import UserCreate, RefreshTokenRequest, UserInfo, UserLogin, TokenResponse, LevelProgress, User as UserSchema, UserUpdate, DailyQuestTasks, DailyQuestTask
 from ..auth import (
     create_access_token, 
     create_refresh_token, 
@@ -13,33 +13,162 @@ from ..auth import (
     hash_password,
     verify_password,
     require_admin,
-    verify_token_with_role
+    verify_token_with_role,
+    get_current_user,
+    get_password_hash
 )
-from ..leveling import get_level_progress
+from ..leveling import get_level_progress, get_user_stats_from_cache, update_user_stats_on_quest_created, update_user_stats_on_quest_completed, update_user_stats_on_quest_failed, update_user_stats_on_task_created, update_user_stats_on_task_completed
+from typing import List
 
 router = APIRouter(tags=["users"])
 
-@router.put("/register")
+@router.post("/", response_model=UserSchema)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    """Register a new user"""
-    if db.query(User).filter(User.username == user.username).first():
-        raise HTTPException(status_code=409, detail="User already exists")
-    if db.query(User).filter(User.email == user.email).first():
-        raise HTTPException(status_code=409, detail="Email already exists")
-
-    hashed_password = hash_password(user.password)
+    """Create a new user"""
+    # Check if username already exists
+    db_user = db.query(User).filter(User.username == user.username).first()
+    if db_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already registered"
+        )
+    
+    # Check if email already exists
+    db_user = db.query(User).filter(User.email == user.email).first()
+    if db_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
+    hashed_password = get_password_hash(user.password)
     db_user = User(
-        username=user.username, 
-        email=user.email, 
-        hashed_password=hashed_password,
-        role=user.role,
-        xp=0,  # Start with 0 XP
-        level=1  # Start at level 1
+        username=user.username,
+        email=user.email,
+        hashed_password=hashed_password
     )
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
-    return {"message": f"User {user.username} created successfully"}
+    return db_user
+
+@router.get("/me", response_model=UserSchema)
+def read_users_me(current_user: User = Depends(get_current_user)):
+    """Get current user information"""
+    return current_user
+
+@router.put("/me", response_model=UserSchema)
+def update_user(
+    user_update: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update current user information"""
+    # Check if new username already exists (if changing username)
+    if user_update.username and user_update.username != current_user.username:
+        existing_user = db.query(User).filter(User.username == user_update.username).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username already taken"
+            )
+    
+    # Check if new email already exists (if changing email)
+    if user_update.email and user_update.email != current_user.email:
+        existing_user = db.query(User).filter(User.email == user_update.email).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+    
+    # Update fields
+    update_data = user_update.dict(exclude_unset=True)
+    
+    # Convert daily quest tasks to JSON format for storage
+    if "daily_quest_tasks" in update_data:
+        daily_tasks = update_data["daily_quest_tasks"]
+        if daily_tasks:
+            # Validate task limit
+            if len(daily_tasks) > 4:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Daily quest tasks cannot exceed 4 tasks"
+                )
+            # Convert to JSON format
+            update_data["daily_quest_tasks"] = [task.dict() for task in daily_tasks]
+    
+    for field, value in update_data.items():
+        setattr(current_user, field, value)
+    
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+@router.get("/me/daily-quest-tasks", response_model=DailyQuestTasks)
+def get_daily_quest_tasks(current_user: User = Depends(get_current_user)):
+    """Get user's daily quest tasks"""
+    daily_tasks = current_user.daily_quest_tasks or []
+    return DailyQuestTasks(tasks=[DailyQuestTask(**task) for task in daily_tasks])
+
+@router.put("/me/daily-quest-tasks", response_model=DailyQuestTasks)
+def set_daily_quest_tasks(
+    daily_quest_tasks: DailyQuestTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Set user's daily quest tasks"""
+    # Validate task limit
+    if len(daily_quest_tasks.tasks) > 4:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Daily quest tasks cannot exceed 4 tasks"
+        )
+    
+    # Convert to JSON format for storage
+    current_user.daily_quest_tasks = [task.dict() for task in daily_quest_tasks.tasks]
+    db.commit()
+    db.refresh(current_user)
+    
+    return daily_quest_tasks
+
+@router.get("/me/stats")
+def get_user_stats(current_user: User = Depends(get_current_user)):
+    """Get user statistics"""
+    return get_user_stats_from_cache(current_user)
+
+@router.get("/", response_model=List[UserSchema])
+def read_users(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all users (admin only)"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+    users = db.query(User).offset(skip).limit(limit).all()
+    return users
+
+@router.get("/{user_id}", response_model=UserSchema)
+def read_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get a specific user (admin only)"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 @router.post("/login", response_model=TokenResponse)
 def login_user(user_data: UserLogin, db: Session = Depends(get_db)):
@@ -120,132 +249,12 @@ def get_user_profile(current_user: dict = Depends(verify_token_with_role), db: S
 
 @router.get("/stats", response_model=dict)
 def get_user_stats(current_user: dict = Depends(verify_token_with_role), db: Session = Depends(get_db)):
-    """Get detailed statistics for the current user"""
     user = db.query(User).filter(User.username == current_user["username"]).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Quest statistics
-    total_quests = db.query(Quest).filter(Quest.owner_id == user.id).count()
-    completed_quests = db.query(Quest).filter(
-        Quest.owner_id == user.id, 
-        Quest.status == QuestStatus.COMPLETED
-    ).count()
-    pending_quests = db.query(Quest).filter(
-        Quest.owner_id == user.id, 
-        Quest.status == QuestStatus.PENDING
-    ).count()
-    accepted_quests = db.query(Quest).filter(
-        Quest.owner_id == user.id, 
-        Quest.status == QuestStatus.ACCEPTED
-    ).count()
-    rejected_quests = db.query(Quest).filter(
-        Quest.owner_id == user.id, 
-        Quest.status == QuestStatus.REJECTED
-    ).count()
-    failed_quests = db.query(Quest).filter(
-        Quest.owner_id == user.id, 
-        Quest.status.in_([QuestStatus.EXPIRED, QuestStatus.FAILED])
-    ).count()
-    
-    # Quest type breakdown
-    daily_quests = db.query(Quest).filter(
-        Quest.owner_id == user.id,
-        Quest.is_daily == True
-    ).count()
-    penalty_quests = db.query(Quest).filter(
-        Quest.owner_id == user.id,
-        Quest.is_penalty == True
-    ).count()
-    timed_quests = db.query(Quest).filter(
-        Quest.owner_id == user.id,
-        Quest.is_timed == True
-    ).count()
-    hidden_quests = db.query(Quest).filter(
-        Quest.owner_id == user.id,
-        Quest.is_hidden == True
-    ).count()
-    
-    # Task statistics
-    total_tasks = db.query(Task).filter(Task.owner_id == user.id).count()
-    completed_tasks = db.query(Task).filter(
-        Task.owner_id == user.id, 
-        Task.completed == True
-    ).count()
-    pending_tasks = total_tasks - completed_tasks
-    
-    # XP and level statistics
-    level_progress = get_level_progress(user.xp)
-    
-    # Recent activity (last 7 days)
-    week_ago = datetime.utcnow() - timedelta(days=7)
-    recent_quests = db.query(Quest).filter(
-        Quest.owner_id == user.id,
-        Quest.created_at >= week_ago
-    ).count()
-    recent_completed_quests = db.query(Quest).filter(
-        Quest.owner_id == user.id,
-        Quest.status == QuestStatus.COMPLETED,
-        Quest.completed_at >= week_ago
-    ).count()
-    
-    # Calculate completion rates
-    quest_completion_rate = (completed_quests / total_quests * 100) if total_quests > 0 else 0
-    task_completion_rate = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
-    
-    # Calculate average XP per quest (for completed quests)
-    completed_quest_xp = db.query(func.sum(Quest.xp)).filter(
-        Quest.owner_id == user.id,
-        Quest.status == QuestStatus.COMPLETED
-    ).scalar() or 0
-    avg_xp_per_quest = completed_quest_xp / completed_quests if completed_quests > 0 else 0
-    
-    return {
-        "user_info": {
-            "username": user.username,
-            "level": user.level,
-            "xp": user.xp,
-            "level_progress": level_progress
-        },
-        "quest_statistics": {
-            "total_quests": total_quests,
-            "completed_quests": completed_quests,
-            "pending_quests": pending_quests,
-            "accepted_quests": accepted_quests,
-            "rejected_quests": rejected_quests,
-            "failed_quests": failed_quests,
-            "completion_rate": round(quest_completion_rate, 2),
-            "quest_types": {
-                "daily": daily_quests,
-                "penalty": penalty_quests,
-                "timed": timed_quests,
-                "hidden": hidden_quests,
-                "regular": total_quests - daily_quests - penalty_quests - timed_quests - hidden_quests
-            }
-        },
-        "task_statistics": {
-            "total_tasks": total_tasks,
-            "completed_tasks": completed_tasks,
-            "pending_tasks": pending_tasks,
-            "completion_rate": round(task_completion_rate, 2)
-        },
-        "xp_statistics": {
-            "total_xp_earned": user.xp,
-            "avg_xp_per_quest": round(avg_xp_per_quest, 2),
-            "total_xp_from_quests": completed_quest_xp
-        },
-        "recent_activity": {
-            "quests_created_this_week": recent_quests,
-            "quests_completed_this_week": recent_completed_quests
-        },
-        "achievements": {
-            "quest_master": completed_quests >= 100,
-            "task_completer": completed_tasks >= 50,
-            "level_achiever": user.level >= 10,
-            "daily_streak": daily_quests >= 10,
-            "penalty_survivor": penalty_quests >= 5
-        }
-    }
+    stats = get_user_stats_efficient(db, user.id)
+    return stats
 
 # Admin-only endpoints
 @router.get("/admin/all", response_model=list[UserInfo])

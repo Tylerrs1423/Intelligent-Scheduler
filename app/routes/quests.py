@@ -8,7 +8,7 @@ from ..models import Quest, Task, User, QuestStatus
 from ..schemas import QuestCreate, QuestUpdate, QuestOut, QuestCompletionResponse, LevelProgress
 from ..auth import verify_token_with_role
 from ..quest_generator import generate_quest
-from ..leveling import get_quest_xp_reward, add_xp_to_user, get_level_progress
+from ..leveling import get_quest_xp_reward, add_xp_to_user, get_level_progress, update_user_stats_on_quest_created, update_user_stats_on_quest_completed
 
 router = APIRouter(tags=["quests"])
 

@@ -40,6 +40,96 @@ def generate_quest(task):
         "created_at": created_at
     }
 
+def generate_quest_for_user(user_id: int, quest_type: str, db: Session) -> Quest:
+    """
+    Generate a quest for a user based on quest type.
+    This is used by Celery tasks.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise ValueError("User not found")
+    
+    # Quest templates based on type
+    if quest_type == "regular":
+        title_templates = [
+            "Complete a productive task",
+            "Focus on your goals",
+            "Achieve something meaningful",
+            "Make progress today",
+            "Complete a challenge"
+        ]
+        desc_templates = [
+            "You can do this! Stay focused and power through.",
+            "Every hero needs a quest. Make this one count!",
+            "Level up your productivity with this challenge.",
+            "No monsters, just motivation. Go!",
+            "XP awaits those who finish their quests!"
+        ]
+        xp_reward = random.randint(10, 100)
+        quest_type_enum = QuestType.REGULAR
+        
+    elif quest_type == "hidden":
+        title_templates = [
+            "Hidden Discovery",
+            "Secret Challenge",
+            "Mysterious Quest",
+            "Hidden Opportunity"
+        ]
+        desc_templates = [
+            "You've discovered a hidden quest! Complete it for bonus rewards.",
+            "A secret challenge awaits. Can you find it?",
+            "This quest appeared out of nowhere. Make it count!",
+            "Hidden treasures await those who complete this quest."
+        ]
+        xp_reward = random.randint(50, 150)
+        quest_type_enum = QuestType.HIDDEN
+        
+    elif quest_type == "penalty":
+        title_templates = [
+            "Penalty Challenge",
+            "Redemption Quest",
+            "Make Up Quest",
+            "Recovery Mission"
+        ]
+        desc_templates = [
+            "You must complete this penalty quest to recover!",
+            "A chance to redeem yourself. Don't waste it!",
+            "This quest will help you get back on track.",
+            "Complete this to overcome your setback."
+        ]
+        xp_reward = random.randint(25, 75)
+        quest_type_enum = QuestType.PENALTY
+        
+    else:
+        # Default to regular
+        title_templates = ["Complete a task"]
+        desc_templates = ["Stay focused and complete this quest."]
+        xp_reward = random.randint(10, 100)
+        quest_type_enum = QuestType.REGULAR
+    
+    # Generate quest
+    quest_title = random.choice(title_templates)
+    quest_desc = random.choice(desc_templates)
+    now = datetime.utcnow()
+    
+    quest = Quest(
+        title=quest_title,
+        description=quest_desc,
+        quest_type=quest_type_enum,
+        xp_reward=xp_reward,
+        owner_id=user_id,
+        status=QuestStatus.PENDING,
+        created_at=now,
+        earliest_acceptance=now,
+        earliest_completion=now
+    )
+    
+    db.add(quest)
+    db.commit()
+    db.refresh(quest)
+    
+    return quest
+
 def generate_daily_quest(user_id: int, db: Session) -> Quest:
     """Generate a daily quest for a user with their custom tasks"""
     user = db.query(User).filter(User.id == user_id).first()

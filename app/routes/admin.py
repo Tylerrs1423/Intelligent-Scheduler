@@ -1,12 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from ..database import get_db
-from ..models import User
+from ..models import User, UserRole
 from ..schemas import UserInfo
-from ..auth import require_admin
+from ..auth import require_admin, get_current_user
+from typing import List
 
 router = APIRouter(tags=["admin"])
+
+# ============================================================================
+# GET ENDPOINTS (Read)
+# ============================================================================
 
 @router.get("/dashboard")
 def admin_dashboard(current_user: dict = Depends(require_admin)):
@@ -22,19 +28,77 @@ def admin_dashboard(current_user: dict = Depends(require_admin)):
         ]
     }
 
-@router.get("/users", response_model=list[UserInfo])
-def get_all_users(current_user: dict = Depends(require_admin), db: Session = Depends(get_db)):
+@router.get("/users", response_model=List[UserInfo])
+def get_all_users(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: dict = Depends(require_admin), 
+    db: Session = Depends(get_db)
+):
     """Get all users (admin only)"""
-    users = db.query(User).all()
+    users = db.query(User).offset(skip).limit(limit).all()
     return users
 
 @router.get("/users/{user_id}", response_model=UserInfo)
-def get_user_by_id(user_id: int, current_user: dict = Depends(require_admin), db: Session = Depends(get_db)):
+def get_user_by_id(
+    user_id: int, 
+    current_user: dict = Depends(require_admin), 
+    db: Session = Depends(get_db)
+):
     """Get specific user by ID (admin only)"""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
+@router.get("/stats")
+def get_user_stats(current_user: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    """Get user statistics (admin only)"""
+    total_users = db.query(User).count()
+    active_users = db.query(User).filter(User.is_active == True).count()
+    admin_users = db.query(User).filter(User.role == "admin").count()
+    inactive_users = total_users - active_users
+    
+    # XP and level statistics
+    total_xp = db.query(User).with_entities(func.sum(User.xp)).scalar() or 0
+    avg_level = db.query(User).with_entities(func.avg(User.level)).scalar() or 0
+    max_level_user = db.query(User).order_by(User.level.desc(), User.xp.desc()).first()
+    
+    return {
+        "total_users": total_users,
+        "active_users": active_users,
+        "inactive_users": inactive_users,
+        "admin_users": admin_users,
+        "regular_users": total_users - admin_users,
+        "active_percentage": round((active_users / total_users) * 100, 2) if total_users > 0 else 0,
+        "total_xp_earned": total_xp,
+        "average_level": round(avg_level, 2),
+        "highest_level_user": {
+            "username": max_level_user.username,
+            "level": max_level_user.level,
+            "xp": max_level_user.xp
+        } if max_level_user else None
+    }
+
+@router.get("/system-info")
+def get_system_info(current_user: dict = Depends(require_admin)):
+    """Get system information (admin only)"""
+    import platform
+    import psutil
+    
+    return {
+        "system": platform.system(),
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
+        "cpu_count": psutil.cpu_count(),
+        "memory_total": f"{psutil.virtual_memory().total / (1024**3):.2f} GB",
+        "memory_available": f"{psutil.virtual_memory().available / (1024**3):.2f} GB",
+        "disk_usage": f"{psutil.disk_usage('/').percent:.1f}%"
+    }
+
+# ============================================================================
+# PUT ENDPOINTS (Update)
+# ============================================================================
 
 @router.put("/users/{user_id}/role")
 def update_user_role(
@@ -84,45 +148,25 @@ def update_user_status(
     status_text = "activated" if is_active else "deactivated"
     return {"message": f"User {user.username} {status_text}"}
 
-@router.get("/stats")
-def get_user_stats(current_user: dict = Depends(require_admin), db: Session = Depends(get_db)):
-    """Get user statistics (admin only)"""
-    total_users = db.query(User).count()
-    active_users = db.query(User).filter(User.is_active == True).count()
-    admin_users = db.query(User).filter(User.role == "admin").count()
-    inactive_users = total_users - active_users
-    
-    return {
-        "total_users": total_users,
-        "active_users": active_users,
-        "inactive_users": inactive_users,
-        "admin_users": admin_users,
-        "regular_users": total_users - admin_users,
-        "active_percentage": round((active_users / total_users) * 100, 2) if total_users > 0 else 0
-    }
+# ============================================================================
+# DELETE ENDPOINTS
+# ============================================================================
 
 @router.delete("/users/{user_id}")
-def delete_user(user_id: int, current_user: dict = Depends(require_admin), db: Session = Depends(get_db)):
+def delete_user(
+    user_id: int, 
+    current_user: dict = Depends(require_admin), 
+    db: Session = Depends(get_db)
+):
     """Delete a user (admin only)"""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    
+    # Prevent admin from deleting themselves
+    if user.username == current_user["username"]:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    
     db.delete(user)
     db.commit()
-    return {"message": "User deleted"}
-
-@router.get("/system-info")
-def get_system_info(current_user: dict = Depends(require_admin)):
-    """Get system information (admin only)"""
-    import platform
-    import psutil
-    
-    return {
-        "system": platform.system(),
-        "platform": platform.platform(),
-        "python_version": platform.python_version(),
-        "cpu_count": psutil.cpu_count(),
-        "memory_total": f"{psutil.virtual_memory().total / (1024**3):.2f} GB",
-        "memory_available": f"{psutil.virtual_memory().available / (1024**3):.2f} GB",
-        "disk_usage": f"{psutil.disk_usage('/').percent:.1f}%"
-    } 
+    return {"message": "User deleted"} 

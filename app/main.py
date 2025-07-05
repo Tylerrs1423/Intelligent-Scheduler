@@ -2,14 +2,10 @@ from fastapi import FastAPI
 from fastapi.security import HTTPBearer
 from app.database import engine
 from app.models import Base
-from app.routes import users, protected, admin, tasks, quests
-from app.scheduler import start_scheduler, stop_scheduler
+from app.routes import users, admin, tasks, quests
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
-
-# Start the quest scheduler
-start_scheduler()
 
 # Create FastAPI app
 app = FastAPI(
@@ -20,10 +16,9 @@ app = FastAPI(
 
 # Include routers
 app.include_router(users.router, prefix="/users", tags=["users"])
-app.include_router(protected.router, prefix="/protected", tags=["protected"])
 app.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 app.include_router(quests.router, prefix="/quests", tags=["quests"])
-app.include_router(admin.router, tags=["admin"])
+app.include_router(admin.router, prefix="/admin", tags=["admin"])
 
 @app.get("/")
 def read_root():
@@ -47,18 +42,17 @@ def read_root():
             "Progressive leveling difficulty"
         ],
         "endpoints": {
-            "register": "PUT /users/register - Create a new user",
-            "login": "POST /users/login - Login with JSON data",
+            "register": "POST /users/register - Create a new user",
+            "login": "POST /users/login - Login with username and password",
             "refresh": "POST /users/refresh - Refresh access token",
-            "profile": "GET /users/profile - Get user profile with level progress",
-            "stats": "GET /users/stats - Get detailed user statistics and achievements",
+            "profile": "GET /users/me/profile - Get user profile with level progress",
+            "stats": "GET /users/me/stats - Get detailed user statistics",
             "tasks": "CRUD /tasks/ - Task management for users",
             "quests": "CRUD /quests/ - Quest management (standalone or task-based)",
             "quests_generate": "POST /quests/generate/{task_id} - Generate quest from task",
             "quests_daily": "GET /quests/daily/available - Available daily quests",
             "quests_penalty": "GET /quests/penalty/active - Active penalty quests",
             "quests_standalone": "GET /quests/standalone/available - Standalone quests",
-            "protected": "GET /protected/ - Protected route requiring authentication",
             "admin_dashboard": "GET /admin/dashboard - Admin dashboard (admin only)",
             "admin_users": "GET /admin/users - View all users (admin only)",
             "admin_stats": "GET /admin/stats - User statistics with XP data (admin only)",

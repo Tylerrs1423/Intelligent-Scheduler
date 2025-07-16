@@ -1,22 +1,4 @@
-# Ignore Python cache
-app/__pycache__
-
-# Ignore SQLite database files
-*.db
-
-# Ignore environment variables file
-.env
-
-# Ignore virtual environment folder
-env/
-
-
-# Ignore OS files
-.DS_Store
-
-app/test.db
-
-# Python
+# Python cache
 __pycache__/
 *.py[cod]
 *.pyo
@@ -24,25 +6,30 @@ __pycache__/
 *.pdb
 *.pyc
 
-# SQLite database
+# SQLite database files
+*.db
 app/test.db
 
-# Virtual environment
+# Redis dump files
+*.rdb
+dump.rdb
+
+# Environment variables file
+.env
+
+# Virtual environment folders
 env/
 .venv/
 venv/
 
-# Environment variables
-.env
+# OS files
+.DS_Store
+Thumbs.db
 
 # VSCode and other editor settings
 .vscode/
 .idea/
 *.swp
-
-# OS files
-.DS_Store
-Thumbs.db
 
 # Test output, coverage, and logs
 *.log

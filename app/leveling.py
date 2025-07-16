@@ -1,230 +1,225 @@
 """
 Leveling system for AI Foco
-Handles XP calculations, level progression, and quest rewards
+Handles XP-locked leveling, quest rewards, and user statistics
 """
 
 from typing import Tuple
 from sqlalchemy.orm import Session
 from datetime import datetime
+from .models import QuestType
 
 # Leveling constants
 BASE_XP_PER_LEVEL = 100
 MAX_LEVEL = 500
-DAILY_QUEST_XP = 100
 
-def calculate_xp_for_level(level: int) -> int:
-    """
-    Calculate XP required to reach a specific level.
-    XP requirement increases with each level.
-    """
-    if level <= 1:
+# XP curve function (can be changed at any time without affecting existing users)
+def get_next_level_xp(level: int) -> int:
+    """Calculate XP needed for the next level"""
+    if level >= MAX_LEVEL:
         return 0
-    
-    # Formula: Each level requires more XP than the previous
-    # Level 1->2: 100 XP
-    # Level 2->3: 200 XP  
-    # Level 3->4: 300 XP
-    # etc.
-    return sum(BASE_XP_PER_LEVEL * i for i in range(1, level))
+    # Example: 100 * 1.5^(level-1)
+    return int(BASE_XP_PER_LEVEL * (1.5 ** (level - 1)))
 
-def calculate_level_from_xp(xp: int) -> int:
+def award_xp_and_level_up(user_stats, xp_gained: int) -> int:
     """
-    Calculate current level based on total XP.
-    Returns the highest level that can be achieved with the given XP.
-    """
-    if xp < BASE_XP_PER_LEVEL:
-        return 1
-    
-    level = 1
-    while level <= MAX_LEVEL:
-        xp_needed = calculate_xp_for_level(level + 1)
-        if xp < xp_needed:
-            break
-        level += 1
-    
-    return min(level, MAX_LEVEL)
-
-def calculate_xp_to_next_level(current_xp: int) -> int:
-    """
-    Calculate XP needed to reach the next level.
-    """
-    current_level = calculate_level_from_xp(current_xp)
-    if current_level >= MAX_LEVEL:
-        return 0
-    
-    xp_for_next_level = calculate_xp_for_level(current_level + 1)
-    return xp_for_next_level - current_xp
-
-def add_xp_to_user(current_xp: int, xp_to_add: int) -> Tuple[int, int, int]:
-    """
-    Add XP to a user and return new XP, level, and XP gained.
-    
-    Returns:
-        Tuple of (new_xp, new_level, levels_gained)
-    """
-    old_level = calculate_level_from_xp(current_xp)
-    new_xp = max(0, current_xp + xp_to_add)  # XP can't go below 0
-    new_level = calculate_level_from_xp(new_xp)
-    levels_gained = new_level - old_level
-    
-    return new_xp, new_level, levels_gained
-
-def remove_xp_from_user(current_xp: int, xp_to_remove: int) -> Tuple[int, int, int]:
-    """
-    Remove XP from a user and return new XP, level, and levels lost.
-    
-    Returns:
-        Tuple of (new_xp, new_level, levels_lost)
-    """
-    old_level = calculate_level_from_xp(current_xp)
-    new_xp = max(0, current_xp - xp_to_remove)  # XP can't go below 0
-    new_level = calculate_level_from_xp(new_xp)
-    levels_lost = old_level - new_level
-    
-    return new_xp, new_level, levels_lost
-
-def get_quest_xp_reward(quest_xp: int, quest_type: str, is_penalty: bool = False) -> int:
-    """
-    Calculate the actual XP reward for completing a quest.
+    Add XP to user and handle level-ups. Only ever increase level when enough XP is earned.
     
     Args:
-        quest_xp: Base XP of the quest
-        quest_type: Type of quest (daily, regular, etc.)
-        is_penalty: Whether this is a penalty quest (negative XP)
-    
+        user_stats: UserStats object
+        xp_gained: XP to award
+        
     Returns:
-        XP reward (positive for normal quests, negative for penalty quests)
+        Number of levels gained
     """
-    if is_penalty:
-        # Penalty quests give negative XP
-        return -quest_xp
+    user_stats.xp_total += xp_gained
+    user_stats.xp_since_last_level += xp_gained
+    levels_gained = 0
     
-    # Daily quests always give 100 XP
-    if quest_type == "daily":
-        return DAILY_QUEST_XP
+    while user_stats.xp_since_last_level >= user_stats.xp_needed_for_next:
+        user_stats.xp_since_last_level -= user_stats.xp_needed_for_next
+        user_stats.level += 1
+        user_stats.xp_needed_for_next = get_next_level_xp(user_stats.level)
+        levels_gained += 1
+        
+        # Cap at max level
+        if user_stats.level >= MAX_LEVEL:
+            user_stats.xp_since_last_level = 0
+            user_stats.xp_needed_for_next = 0
+            break
     
-    # Other quest types give their base XP
-    return quest_xp
+    return levels_gained
 
-def get_level_progress(current_xp: int) -> dict:
-    """
-    Get detailed level progress information.
-    
-    Returns:
-        Dictionary with level progress details
-    """
-    current_level = calculate_level_from_xp(current_xp)
-    xp_for_current_level = calculate_xp_for_level(current_level)
-    xp_for_next_level = calculate_xp_for_level(current_level + 1) if current_level < MAX_LEVEL else xp_for_current_level
-    
-    xp_in_current_level = current_xp - xp_for_current_level
-    xp_needed_for_next = xp_for_next_level - current_xp
-    
-    if current_level >= MAX_LEVEL:
-        progress_percentage = 100.0
-    else:
-        level_xp_range = xp_for_next_level - xp_for_current_level
-        progress_percentage = (xp_in_current_level / level_xp_range) * 100 if level_xp_range > 0 else 0
-    
+def get_level_progress(user_stats) -> dict:
+    if user_stats.level >= MAX_LEVEL:
+        return {
+            "current_level": user_stats.level,
+            "current_xp": user_stats.xp_total,
+            "xp_in_current_level": 0,
+            "xp_for_next_level": 0,
+            "progress_percentage": 100.0,
+            "is_max_level": True
+        }
+    progress_percentage = (user_stats.xp_since_last_level / user_stats.xp_needed_for_next * 100) if user_stats.xp_needed_for_next > 0 else 0
     return {
-        "current_level": current_level,
-        "current_xp": current_xp,
-        "xp_in_current_level": xp_in_current_level,
-        "xp_for_next_level": xp_needed_for_next,
+        "current_level": user_stats.level,
+        "current_xp": user_stats.xp_total,
+        "xp_in_current_level": user_stats.xp_since_last_level,
+        "xp_for_next_level": user_stats.xp_needed_for_next,
         "progress_percentage": round(progress_percentage, 2),
-        "is_max_level": current_level >= MAX_LEVEL
+        "is_max_level": False
     }
 
-# Statistics update functions
-def update_user_stats_on_quest_created(db: Session, user_id: int):
-    """Increment quest creation counter when a new quest is created"""
-    from .models import User
-    user = db.query(User).filter(User.id == user_id).first()
-    if user:
-        user.total_quests_created += 1
-        user.stats_updated_at = datetime.utcnow()
-        db.commit()
-
-def update_user_stats_on_quest_completed(db: Session, user_id: int, quest_xp: int, quest_type: str, is_penalty: bool = False):
-    """Update user stats when a quest is completed"""
-    from .models import User
-    user = db.query(User).filter(User.id == user_id).first()
-    if user:
-        # Update completion counters
-        user.total_quests_completed += 1
-        user.total_xp_earned += quest_xp
+# Batch update system for better performance
+class UserStatsBatch:
+    """Batch user statistics updates to reduce database commits"""
+    
+    def __init__(self):
+        self.updates = {}
+    
+    def add_quest_created(self, user_id: int):
+        if user_id not in self.updates:
+            self.updates[user_id] = {"quests_created": 0, "quests_completed": 0, "quests_failed": 0, "goals_created": 0, "goals_completed": 0}
+        self.updates[user_id]["quests_created"] += 1
+    
+    def add_quest_completed(self, user_id: int, quest_type: str):
+        if user_id not in self.updates:
+            self.updates[user_id] = {"quests_created": 0, "quests_completed": 0, "quests_failed": 0, "goals_created": 0, "goals_completed": 0}
+        self.updates[user_id]["quests_completed"] += 1
+    
+    def add_quest_failed(self, user_id: int):
+        if user_id not in self.updates:
+            self.updates[user_id] = {"quests_created": 0, "quests_completed": 0, "quests_failed": 0, "goals_created": 0, "goals_completed": 0}
+        self.updates[user_id]["quests_failed"] += 1
+    
+    def add_goal_created(self, user_id: int):
+        if user_id not in self.updates:
+            self.updates[user_id] = {"quests_created": 0, "quests_completed": 0, "quests_failed": 0, "goals_created": 0, "goals_completed": 0}
+        self.updates[user_id]["goals_created"] += 1
+    
+    def add_goal_completed(self, user_id: int):
+        if user_id not in self.updates:
+            self.updates[user_id] = {"quests_created": 0, "quests_completed": 0, "quests_failed": 0, "goals_created": 0, "goals_completed": 0}
+        self.updates[user_id]["goals_completed"] += 1
+    
+    def get_pending_updates(self, user_id: int) -> dict:
+        """Get pending updates for a user (before commit)"""
+        return self.updates.get(user_id, {})
+    
+    def commit(self, db: Session):
+        """Commit all batched updates to database in one transaction"""
+        from .models import UserStats
         
-        # Update quest type counters
-        if quest_type == "daily":
-            user.daily_quests_completed += 1
-        elif is_penalty:
-            user.penalty_quests_completed += 1
+        for user_id, updates in self.updates.items():
+            user_stats = db.query(UserStats).filter(UserStats.user_id == user_id).first()
+            if user_stats:
+                user_stats.total_quests_created += updates.get("quests_created", 0)
+                user_stats.total_quests_completed += updates.get("quests_completed", 0)
+                user_stats.total_quests_failed += updates.get("quests_failed", 0)
+                user_stats.total_goals_created += updates.get("goals_created", 0)
+                user_stats.total_goals_completed += updates.get("goals_completed", 0)
+                user_stats.stats_updated_at = datetime.utcnow()
         
-        user.stats_updated_at = datetime.utcnow()
+        # Single commit for all updates
         db.commit()
+        self.updates.clear()
 
-def update_user_stats_on_quest_failed(db: Session, user_id: int):
-    """Update user stats when a quest fails"""
-    from .models import User
-    user = db.query(User).filter(User.id == user_id).first()
-    if user:
-        user.total_quests_failed += 1
-        user.stats_updated_at = datetime.utcnow()
-        db.commit()
+# Global batch instance
+stats_batch = UserStatsBatch()
 
-def update_user_stats_on_task_created(db: Session, user_id: int):
-    """Increment task creation counter when a new task is created"""
-    from .models import User
-    user = db.query(User).filter(User.id == user_id).first()
-    if user:
-        user.total_tasks_created += 1
-        user.stats_updated_at = datetime.utcnow()
-        db.commit()
+# Batch update functions
+def update_user_stats_on_quest_created(user_id: int):
+    """Add quest creation to batch"""
+    stats_batch.add_quest_created(user_id)
 
-def update_user_stats_on_task_completed(db: Session, user_id: int):
-    """Update user stats when a task is completed"""
-    from .models import User
-    user = db.query(User).filter(User.id == user_id).first()
-    if user:
-        user.total_tasks_completed += 1
-        user.stats_updated_at = datetime.utcnow()
-        db.commit()
+def update_user_stats_on_quest_completed(user_id: int, quest_type: str):
+    """Add quest completion to batch"""
+    stats_batch.add_quest_completed(user_id, quest_type)
 
-def get_user_stats_from_cache(user) -> dict:
+def update_user_stats_on_quest_failed(user_id: int):
+    """Add quest failure to batch"""
+    stats_batch.add_quest_failed(user_id)
+
+def update_user_stats_on_goal_created(user_id: int):
+    """Add goal creation to batch"""
+    stats_batch.add_goal_created(user_id)
+
+def update_user_stats_on_goal_completed(user_id: int):
+    """Add goal completion to batch"""
+    stats_batch.add_goal_completed(user_id)
+
+def commit_user_stats_batch(db: Session):
+    """Commit all batched user statistics updates"""
+    stats_batch.commit(db)
+
+def get_user_stats(user, db: Session = None, include_pending: bool = True) -> dict:
     """
-    Get user statistics from cached database fields.
-    Much faster than calculating from scratch.
+    Get user statistics. Automatically includes pending batch updates if available.
+    
+    Args:
+        user: User object with stats relationship
+        db: Database session (needed if include_pending=True)
+        include_pending: Whether to include pending batch updates (default: True)
     """
+    if not user.stats:
+        return {"error": "User stats not found"}
+    
+    stats = user.stats
+    
+    # Get base stats from database
+    base_stats = {
+        "total_quests_created": stats.total_quests_created,
+        "total_quests_completed": stats.total_quests_completed,
+        "total_quests_failed": stats.total_quests_failed,
+        "total_goals_created": stats.total_goals_created,
+        "total_goals_completed": stats.total_goals_completed,
+        "daily_quests_completed": stats.daily_quests_completed,
+        "penalty_quests_completed": stats.penalty_quests_completed,
+        "timed_quests_completed": stats.timed_quests_completed,
+        "hidden_quests_completed": stats.hidden_quests_completed,
+    }
+    
+    # Include pending updates if requested and available
+    has_pending = False
+    if include_pending and db:
+        pending = stats_batch.get_pending_updates(user.id)
+        if pending:
+            has_pending = True
+            base_stats["total_quests_created"] += pending.get("quests_created", 0)
+            base_stats["total_quests_completed"] += pending.get("quests_completed", 0)
+            base_stats["total_quests_failed"] += pending.get("quests_failed", 0)
+            base_stats["total_goals_created"] += pending.get("goals_created", 0)
+            base_stats["total_goals_completed"] += pending.get("goals_completed", 0)
+    
     return {
         "user_info": {
             "username": user.username,
-            "level": user.level,
-            "xp": user.xp,
-            "level_progress": get_level_progress(user.xp)
+            "level": stats.level,
+            "xp_total": stats.xp_total,
+            "level_progress": get_level_progress(stats)
         },
         "quest_statistics": {
-            "total_quests": user.total_quests_created,
-            "completed_quests": user.total_quests_completed,
-            "failed_quests": user.total_quests_failed,
-            "completion_rate": round((user.total_quests_completed / user.total_quests_created * 100) if user.total_quests_created > 0 else 0, 2),
+            "total_quests": base_stats["total_quests_created"],
+            "completed_quests": base_stats["total_quests_completed"],
+            "failed_quests": base_stats["total_quests_failed"],
+            "completion_rate": round((base_stats["total_quests_completed"] / base_stats["total_quests_created"] * 100) if base_stats["total_quests_created"] > 0 else 0, 2),
             "quest_types": {
-                "daily": user.daily_quests_completed,
-                "penalty": user.penalty_quests_completed,
-                "timed": user.timed_quests_completed,
-                "hidden": user.hidden_quests_completed,
-                "regular": user.total_quests_completed - user.daily_quests_completed - user.penalty_quests_completed - user.timed_quests_completed - user.hidden_quests_completed
+                "daily": base_stats["daily_quests_completed"],
+                "penalty": base_stats["penalty_quests_completed"],
+                "timed": base_stats["timed_quests_completed"],
+                "hidden": base_stats["hidden_quests_completed"],
+                "regular": base_stats["total_quests_completed"] - base_stats["daily_quests_completed"] - base_stats["penalty_quests_completed"] - base_stats["timed_quests_completed"] - base_stats["hidden_quests_completed"]
             }
         },
-        "task_statistics": {
-            "total_tasks": user.total_tasks_created,
-            "completed_tasks": user.total_tasks_completed,
-            "pending_tasks": user.total_tasks_created - user.total_tasks_completed,
-            "completion_rate": round((user.total_tasks_completed / user.total_tasks_created * 100) if user.total_tasks_created > 0 else 0, 2)
+        "goal_statistics": {
+            "total_goals": base_stats["total_goals_created"],
+            "completed_goals": base_stats["total_goals_completed"],
+            "pending_goals": base_stats["total_goals_created"] - base_stats["total_goals_completed"],
+            "completion_rate": round((base_stats["total_goals_completed"] / base_stats["total_goals_created"] * 100) if base_stats["total_goals_created"] > 0 else 0, 2)
         },
         "xp_statistics": {
-            "total_xp_earned": user.total_xp_earned,
-            "avg_xp_per_quest": round(user.total_xp_earned / user.total_quests_completed, 2) if user.total_quests_completed > 0 else 0,
-            "total_xp_from_quests": user.total_xp_earned
+            "total_xp_earned": stats.xp_total,
+            "avg_xp_per_quest": round(stats.xp_total / base_stats["total_quests_completed"], 2) if base_stats["total_quests_completed"] > 0 else 0,
         },
-        "stats_last_updated": user.stats_updated_at
+        "stats_last_updated": stats.stats_updated_at,
+        "has_pending_updates": has_pending
     } 

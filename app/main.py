@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.security import HTTPBearer
 from app.database import engine
 from app.models import Base
-from app.routes import users, admin, tasks, quests
+from app.routes import users, admin, goals, quests, templates, user_preferences
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -16,9 +16,11 @@ app = FastAPI(
 
 # Include routers
 app.include_router(users.router, prefix="/users", tags=["users"])
-app.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
+app.include_router(goals.router, prefix="/goals", tags=["goals"])
 app.include_router(quests.router, prefix="/quests", tags=["quests"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
+app.include_router(templates.router, prefix="/templates", tags=["templates"])
+app.include_router(user_preferences.router, tags=["user-preferences"])
 
 @app.get("/")
 def read_root():
@@ -31,7 +33,7 @@ def read_root():
             "Role-based authorization (user/admin)",
             "Protected routes",
             "Admin dashboard and user management",
-            "Task management (CRUD)",
+            "Goal management (CRUD)",
             "Advanced Quest system with time-based mechanics",
             "Quest types: Regular, Daily, Hidden, Penalty, Timed",
             "Time-based quest constraints and deadlines",
@@ -47,9 +49,9 @@ def read_root():
             "refresh": "POST /users/refresh - Refresh access token",
             "profile": "GET /users/me/profile - Get user profile with level progress",
             "stats": "GET /users/me/stats - Get detailed user statistics",
-            "tasks": "CRUD /tasks/ - Task management for users",
+            "goals": "CRUD /goals/ - Goal management for users",
             "quests": "CRUD /quests/ - Quest management (standalone or task-based)",
-            "quests_generate": "POST /quests/generate/{task_id} - Generate quest from task",
+            "quests_generate": "POST /quests/generate/{goal_id} - Generate quest from goal",
             "quests_daily": "GET /quests/daily/available - Available daily quests",
             "quests_penalty": "GET /quests/penalty/active - Active penalty quests",
             "quests_standalone": "GET /quests/standalone/available - Standalone quests",

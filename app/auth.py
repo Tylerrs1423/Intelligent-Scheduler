@@ -69,8 +69,11 @@ def get_current_user(
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        # Get user from database
-        user = db.query(User).filter(User.username == username).first()
+        # Get user from database with stats
+        from sqlalchemy.orm import joinedload
+        user = db.query(User).options(
+            joinedload(User.stats)
+        ).filter(User.username == username).first()
         if user is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

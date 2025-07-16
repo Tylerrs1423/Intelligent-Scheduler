@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from datetime import timedelta
 
 from ..database import get_db
 from ..models import User
-from ..schemas import UserCreate, RefreshTokenRequest, UserLogin, TokenResponse, UserSchema, UserUpdate, DailyQuestTasks, DailyQuestTask
+from ..schemas import UserCreate, RefreshTokenRequest, UserLogin, TokenResponse, UserSchema, UserUpdate, DailyQuestGoals, DailyQuestGoal
 from ..auth import (
     create_access_token, 
     create_refresh_token, 
@@ -13,7 +13,7 @@ from ..auth import (
     get_current_user,
     get_password_hash
 )
-from ..leveling import get_level_progress, get_user_stats_from_cache
+from ..leveling import get_user_stats
 from typing import List
 
 router = APIRouter(tags=["users"])
@@ -50,6 +50,14 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
+    
+    # Create UserStats record for the new user
+    from ..models import UserStats
+    user_stats = UserStats(user_id=db_user.id)
+    db.add(user_stats)
+    db.commit()
+    db.refresh(db_user)
+    
     return db_user
 
 @router.post("/login", response_model=TokenResponse)
@@ -114,36 +122,30 @@ def refresh_token(request: RefreshTokenRequest):
 # ============================================================================
 
 @router.get("/me", response_model=UserSchema)
-def get_current_user_info(current_user: User = Depends(get_current_user)):
+def get_current_user_info(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get current user information"""
+    # Ensure user has stats record
+    if not current_user.stats:
+        from ..models import UserStats
+        user_stats = UserStats(user_id=current_user.id)
+        db.add(user_stats)
+        db.commit()
+        db.refresh(current_user)
+    
     return current_user
 
-@router.get("/me/profile", response_model=dict)
-def get_user_profile(current_user: User = Depends(get_current_user)):
-    """Get current user's profile with level progress"""
-    level_progress = get_level_progress(current_user.xp)
-    
-    return {
-        "id": current_user.id,
-        "username": current_user.username,
-        "email": current_user.email,
-        "role": current_user.role.value,
-        "is_active": current_user.is_active,
-        "xp": current_user.xp,
-        "level": current_user.level,
-        "level_progress": level_progress
-    }
 
 @router.get("/me/stats", response_model=dict)
-def get_user_stats(current_user: User = Depends(get_current_user)):
+def get_user_stats_route(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get current user's detailed statistics"""
-    return get_user_stats_from_cache(current_user)
+    return get_user_stats(current_user, db)
 
-@router.get("/me/daily-quest-tasks", response_model=DailyQuestTasks)
-def get_daily_quest_tasks(current_user: User = Depends(get_current_user)):
-    """Get user's daily quest tasks"""
-    daily_tasks = current_user.daily_quest_tasks or []
-    return DailyQuestTasks(tasks=[DailyQuestTask(**task) for task in daily_tasks])
+@router.get("/me/daily-quest-goals", response_model=DailyQuestGoals)
+def get_daily_quest_goals(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get user's daily quest goals"""
+    # TODO: Replace with actual DB query for user's daily quest goals
+    goals = []  # Placeholder: return empty list if no goals
+    return DailyQuestGoals(goals=goals)
 
 # ============================================================================
 # PUT ENDPOINTS (Update)
@@ -155,65 +157,16 @@ def update_user_profile(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update current user's profile"""
-    # Check if new username already exists (if changing username)
-    if user_update.username and user_update.username != current_user.username:
-        existing_user = db.query(User).filter(User.username == user_update.username).first()
-        if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Username already taken"
-            )
-    
-    # Check if new email already exists (if changing email)
-    if user_update.email and user_update.email != current_user.email:
-        existing_user = db.query(User).filter(User.email == user_update.email).first()
-        if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered"
-            )
-    
-    # Update fields
-    update_data = user_update.dict(exclude_unset=True)
-    
-    # Convert daily quest tasks to JSON format for storage
-    if "daily_quest_tasks" in update_data:
-        daily_tasks = update_data["daily_quest_tasks"]
-        if daily_tasks:
-            # Validate task limit
-            if len(daily_tasks) > 4:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Daily quest tasks cannot exceed 4 tasks"
-                )
-            # Convert to JSON format
-            update_data["daily_quest_tasks"] = [task.dict() for task in daily_tasks]
-    
-    for field, value in update_data.items():
-        setattr(current_user, field, value)
-    
-    db.commit()
-    db.refresh(current_user)
-    return current_user
+    pass
 
-@router.put("/me/daily-quest-tasks", response_model=DailyQuestTasks)
-def set_daily_quest_tasks(
-    daily_quest_tasks: DailyQuestTasks,
+@router.put("/me/daily-quest-goals", response_model=DailyQuestGoals)
+def set_daily_quest_goals(
+    daily_quest_goals: DailyQuestGoals,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Set user's daily quest tasks"""
-    # Validate task limit
-    if len(daily_quest_tasks.tasks) > 4:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Daily quest tasks cannot exceed 4 tasks"
-        )
-    
-    # Convert to JSON format for storage
-    current_user.daily_quest_tasks = [task.dict() for task in daily_quest_tasks.tasks]
-    db.commit()
-    db.refresh(current_user)
-    
-    return daily_quest_tasks 
+    """Set user's daily quest goals"""
+    pass
+
+
+

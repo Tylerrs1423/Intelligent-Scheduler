@@ -1,17 +1,17 @@
 from pydantic import BaseModel, Field, EmailStr
-from datetime import datetime
+from datetime import datetime, time
 from typing import Optional, List
-from .models import UserRole, QuestStatus
+from .models import UserRole, QuestStatus, QuestType, QuestDifficulty, MeasurementType
 
-class DailyQuestTask(BaseModel):
+class DailyQuestGoal(BaseModel):
     title: str
     description: str
     
     class Config:
         from_attributes = True
 
-class DailyQuestTasks(BaseModel):
-    tasks: List[DailyQuestTask]
+class DailyQuestGoals(BaseModel):
+    goals: List[DailyQuestGoal]
     
     class Config:
         from_attributes = True
@@ -27,29 +27,32 @@ class UserUpdate(BaseModel):
     username: Optional[str] = None
     email: Optional[EmailStr] = None
     daily_quest_time: Optional[datetime] = None
-    daily_quest_tasks: Optional[List[DailyQuestTask]] = None
+    daily_quest_goals: Optional[List[DailyQuestGoal]] = None
 
-class UserSchema(UserBase):
-    id: int
-    is_active: bool
-    role: UserRole
-    xp: int
+class UserStatsSchema(BaseModel):
+    xp_total: int
+    xp_since_last_level: int
+    xp_needed_for_next: int
     level: int
-    daily_quest_time: Optional[datetime] = None
-    daily_quest_tasks: Optional[List[DailyQuestTask]] = None
-    
-    # Cached Statistics
     total_quests_created: int
     total_quests_completed: int
     total_quests_failed: int
-    total_tasks_created: int
-    total_tasks_completed: int
-    total_xp_earned: int
+    total_goals_created: int
+    total_goals_completed: int
     daily_quests_completed: int
     penalty_quests_completed: int
     timed_quests_completed: int
     hidden_quests_completed: int
     stats_updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class UserSchema(UserBase):
+    id: int
+    is_active: bool
+    role: UserRole
+    stats: Optional[UserStatsSchema] = None
     
     class Config:
         from_attributes = True
@@ -82,6 +85,9 @@ class UserInfo(BaseModel):
     role: UserRole
     xp: int
     level: int
+    
+    class Config:
+        from_attributes = True
 
 class LevelProgress(BaseModel):
     current_level: int
@@ -99,20 +105,18 @@ class QuestCompletionResponse(BaseModel):
     new_level: int
     level_progress: LevelProgress
 
-class TaskCreate(BaseModel):
+class GoalCreate(BaseModel):
     title: str
     description: Optional[str] = ""
 
-class TaskUpdate(BaseModel):
+class GoalUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
-    completed: Optional[bool] = None
 
-class TaskOut(BaseModel):
+class GoalOut(BaseModel):
     id: int
     title: str
     description: str
-    completed: bool
     created_at: datetime
     updated_at: datetime
     owner_id: int
@@ -124,20 +128,12 @@ class TaskOut(BaseModel):
 class QuestCreate(BaseModel):
     title: str
     description: str
-    xp: int
-    task_id: Optional[int] = None  # Optional task relationship
+    xp_reward: int
+    quest_type: QuestType = QuestType.REGULAR
+    goal_id: Optional[int] = None  # Optional goal relationship
     
-    # Quest type flags
-    is_daily: bool = False
-    is_hidden: bool = False
-    is_penalty: bool = False
-    is_timed: bool = False
-    
-    # Time-based fields
-    earliest_completion_time: Optional[datetime] = None
+    # Time-based fields (only for timed quests)
     completion_deadline: Optional[datetime] = None
-    earliest_acceptance_time: Optional[datetime] = None
-    acceptance_deadline: Optional[datetime] = None
     time_limit_minutes: Optional[int] = None
 
 class QuestUpdate(BaseModel):
@@ -147,29 +143,69 @@ class QuestOut(BaseModel):
     id: int
     title: str
     description: str
-    xp: int
+    xp_reward: int
+    quest_type: QuestType
+    difficulty: QuestDifficulty
     created_at: datetime
+    updated_at: datetime
     status: QuestStatus
     owner_id: int
-    task_id: Optional[int]  # Optional task relationship
     
-    # Quest type flags
-    is_daily: bool
-    is_hidden: bool
-    is_penalty: bool
-    is_timed: bool
-    
-    # Time-based fields
-    earliest_completion_time: Optional[datetime]
-    completion_deadline: Optional[datetime]
-    earliest_acceptance_time: Optional[datetime]
-    acceptance_deadline: Optional[datetime]
+    # Time-based fields (only for timed quests)
+    deadline: Optional[datetime]
     time_limit_minutes: Optional[int]
+    repeatable: bool
     
     # Quest state timestamps
-    accepted_at: Optional[datetime]
     completed_at: Optional[datetime]
 
+    class Config:
+        from_attributes = True
+
+class SubtaskIn(BaseModel):
+    title: str
+    measurement_type: MeasurementType = MeasurementType.BOOLEAN
+    goal_value: Optional[int] = None
+
+class SubtaskOut(BaseModel):
+    id: int
+    title: str
+    measurement_type: MeasurementType
+    goal_value: Optional[int]
+    class Config:
+        orm_mode = True
+
+class DailyTemplateIn(BaseModel):
+    title: str
+    description: str
+    xp_reward: int = 100
+
+class DailyTemplateOut(BaseModel):
+    id: int
+    title: str
+    description: str
+    xp_reward: int
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+    subtasks: List[SubtaskOut]
+    class Config:
+        orm_mode = True
+
+class UserQuestPreferenceIn(BaseModel):
+    preferred_time: Optional[str] = Field(None, description="Time of day in HH:MM format")
+    theme_tags: List[str] = Field(default_factory=list)
+    enabled: bool = True
+    timezone: Optional[str] = None
+
+class UserQuestPreferenceOut(BaseModel):
+    id: int
+    preferred_time: Optional[time]
+    theme_tags: List[str]
+    enabled: bool
+    timezone: Optional[str]
+    created_at: datetime
+    updated_at: datetime
     class Config:
         from_attributes = True
 

@@ -1,40 +1,61 @@
-# Python cache
+env/
 __pycache__/
-*.py[cod]
+*.pyc
 *.pyo
 *.pyd
-*.pdb
-*.pyc
-
-# SQLite database files
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+*.log
+*.sqlite3
 *.db
-app/test.db
-
-# Redis dump files
-*.rdb
-dump.rdb
-
-# Environment variables file
-.env
-
-# Virtual environment folders
-env/
-.venv/
-venv/
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# VSCode and other editor settings
+*.DS_Store
 .vscode/
 .idea/
 *.swp
-
-# Test output, coverage, and logs
-*.log
+*.bak
+*.tmp
+*.env
+*.mypy_cache/
+*.pytest_cache/
 .coverage
 htmlcov/
-*.egg-info/
-dist/
-build/
+.tox/
+.cache/
+*.mo
+*.pot
+celerybeat-schedule
+celerybeat.pid
+*.pid
+*.log
+*.sock
+*.db
+*.sqlite
+*.envrc
+*.secret
+*.pem
+*.key
+*.crt
+*.pkl
+*.h5
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.weights
+*.ipynb_checkpoints/
+.DS_Store
+node_modules/
+

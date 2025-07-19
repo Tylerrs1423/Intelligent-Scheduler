@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field, EmailStr
 from datetime import datetime, time
 from typing import Optional, List
-from .models import UserRole, QuestStatus, QuestType, QuestDifficulty, MeasurementType
+from .models import UserRole, QuestStatus, QuestType, QuestDifficulty, MeasurementType, UserIntensityProfile
 
 class DailyQuestGoal(BaseModel):
     title: str
@@ -131,6 +131,7 @@ class QuestCreate(BaseModel):
     xp_reward: int
     quest_type: QuestType = QuestType.REGULAR
     goal_id: Optional[int] = None  # Optional goal relationship
+    theme_tags: Optional[List[str]] = Field(default_factory=list, description="Theme tags for this quest")
     
     # Time-based fields (only for timed quests)
     completion_deadline: Optional[datetime] = None
@@ -150,6 +151,7 @@ class QuestOut(BaseModel):
     updated_at: datetime
     status: QuestStatus
     owner_id: int
+    theme_tags: List[str] = Field(default_factory=list, description="Theme tags for this quest")
     
     # Time-based fields (only for timed quests)
     deadline: Optional[datetime]
@@ -193,19 +195,38 @@ class DailyTemplateOut(BaseModel):
         orm_mode = True
 
 class UserQuestPreferenceIn(BaseModel):
-    preferred_time: Optional[str] = Field(None, description="Time of day in HH:MM format")
+    preferred_daily_quest_time: Optional[str] = Field(None, description="Time of day in HH:MM format for daily quest")
     theme_tags: List[str] = Field(default_factory=list)
+    goal_intent_paragraph: Optional[str] = Field(None, max_length=150, description="User's goal intent paragraph (max 150 characters)")
     enabled: bool = True
     timezone: Optional[str] = None
+    preffered_difficulty: QuestDifficulty = QuestDifficulty.TIER_1
+    user_intensity_profile: UserIntensityProfile = UserIntensityProfile.STEADY
 
 class UserQuestPreferenceOut(BaseModel):
     id: int
-    preferred_time: Optional[time]
+    preferred_daily_quest_time: Optional[time]
     theme_tags: List[str]
+    goal_intent_paragraph: Optional[str]
     enabled: bool
     timezone: Optional[str]
+    preffered_difficulty: QuestDifficulty
+    user_intensity_profile: UserIntensityProfile
     created_at: datetime
     updated_at: datetime
     class Config:
         from_attributes = True
+
+class QuestTimeRangeIn(BaseModel):
+    start: str = Field(..., description="Start time in HH:MM format")
+    end: str = Field(..., description="End time in HH:MM format")
+
+class QuestTimeRangeListOut(BaseModel):
+    preferred_quest_times: List[QuestTimeRangeIn]
+
+class ThemeTagIn(BaseModel):
+    theme_tag: str = Field(..., description="Theme tag (must be one of the allowed categories)")
+
+class ThemeTagListOut(BaseModel):
+    theme_tags: List[str]
 

@@ -19,8 +19,8 @@ def schedule_user_daily_quest(db, user, user_pref):
     tz = pytz.timezone(user_pref.timezone or 'UTC')
     now = datetime.now(tz)
     # Use hour and minute attributes from time object
-    hour = user_pref.preferred_time.hour
-    minute = user_pref.preferred_time.minute
+    hour = user_pref.preferred_daily_quest_time.hour
+    minute = user_pref.preferred_daily_quest_time.minute
     scheduled_local = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if scheduled_local <= now:
         scheduled_local += timedelta(days=1)

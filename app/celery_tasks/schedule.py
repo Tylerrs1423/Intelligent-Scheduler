@@ -84,7 +84,7 @@ def generate_daily_quest(user_id: int):
         is_main_daily_quest=True,
         quest_type=QuestType.REGULAR,
         difficulty=QuestDifficulty.TIER_1,
-        status=QuestStatus.PENDING,
+        status=QuestStatus.ACCEPTED,  # Changed from PENDING to ACCEPTED
         sent_out_at=now,
         deadline=now + timedelta(hours=24),
         time_limit_minutes=1440  # 24 hours in minutes

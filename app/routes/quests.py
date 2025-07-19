@@ -50,7 +50,8 @@ def create_quest(quest_data: QuestCreate, current_user: User = Depends(get_curre
         deadline=quest_data.completion_deadline,
         time_limit_minutes=quest_data.time_limit_minutes,
         status=QuestStatus.STANDING_BY,
-        owner_id=current_user.id
+        owner_id=current_user.id,
+        theme_tags=quest_data.theme_tags or []
     )
     
     # Link quest to goal if provided
@@ -108,27 +109,19 @@ def accept_quest(quest_id: int, current_user: User = Depends(get_current_user), 
     quest = db.query(Quest).filter(Quest.id == quest_id, Quest.owner_id == current_user.id).first()
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
-    
-    # Prevent accepting main daily quests
-    if quest.is_main_daily_quest:
-        raise HTTPException(status_code=400, detail="Daily quests cannot be accepted - they are automatically sent out")
-    
     if quest.status != QuestStatus.PENDING:
         raise HTTPException(status_code=400, detail="Quest is not pending")
-    
     if quest.time_limit_to_accept:
         if quest.sent_out_at is None:
             raise HTTPException(status_code=400, detail="Quest has not been sent out")
         if datetime.now() > quest.sent_out_at + timedelta(minutes=quest.time_limit_to_accept):
             raise HTTPException(status_code=400, detail="Quest acceptance deadline has passed")
-    
     current_user.stats.total_quests_accepted += 1
     quest.status = QuestStatus.ACCEPTED
     quest.accepted_at = datetime.now()
     db.commit()
     db.refresh(quest)
     return quest
-    
 
 @router.post("/{quest_id}/reject", response_model=QuestOut)
 def reject_quest(quest_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -136,19 +129,13 @@ def reject_quest(quest_id: int, current_user: User = Depends(get_current_user), 
     quest = db.query(Quest).filter(Quest.id == quest_id, Quest.owner_id == current_user.id).first()
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
-    
-    if quest.is_main_daily_quest:
-        raise HTTPException(status_code=400, detail="Daily quests cannot be accepted - they are automatically sent out")
-    
     if quest.status != QuestStatus.PENDING:
         raise HTTPException(status_code=400, detail="Quest is not pending")
-    
     if quest.time_limit_to_accept:
         if quest.sent_out_at is None:
             raise HTTPException(status_code=400, detail="Quest has not been sent out")
         if datetime.now() > quest.sent_out_at + timedelta(minutes=quest.time_limit_to_accept):
             raise HTTPException(status_code=400, detail="Quest acceptance deadline has passed")
-    
     current_user.stats.total_quests_rejected += 1
     quest.status = QuestStatus.REJECTED
     quest.rejected_at = datetime.now()
@@ -156,54 +143,32 @@ def reject_quest(quest_id: int, current_user: User = Depends(get_current_user), 
     db.refresh(quest)
     return quest
 
-
 @router.post("/{quest_id}/complete", response_model=QuestCompletionResponse)
 def complete_quest(quest_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Complete a quest with XP rewards and level progression"""
     quest = db.query(Quest).filter(Quest.id == quest_id, Quest.owner_id == current_user.id).first()
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
-    
-    # Allow main daily quests to be completed from PENDING status
-    if quest.is_main_daily_quest:
-        if quest.status != QuestStatus.PENDING:
-            raise HTTPException(status_code=400, detail="Daily quest is not pending")
-    else:
-        # Regular quests still need to be accepted first
-        if quest.status != QuestStatus.ACCEPTED:
-            raise HTTPException(status_code=400, detail="Quest is not accepted")
-    
+    if quest.status != QuestStatus.ACCEPTED:
+        raise HTTPException(status_code=400, detail="Quest is not accepted")
     if quest.time_limit_to_complete:
         if quest.sent_out_at is None:
             raise HTTPException(status_code=400, detail="Quest has not been sent out")
         if datetime.now() > quest.sent_out_at + timedelta(minutes=quest.time_limit_to_complete):
             raise HTTPException(status_code=400, detail="Quest completion deadline has passed")
-    
-    # Ensure user has stats
     if not current_user.stats:
         from ..models import UserStats
         user_stats = UserStats(user_id=current_user.id)
         db.add(user_stats)
         db.commit()
         db.refresh(current_user)
-    
-    # Award XP and handle level-ups
     levels_gained = award_xp_and_level_up(current_user.stats, quest.xp_reward)
-    
-    # Update quest status
     quest.status = QuestStatus.COMPLETED
     quest.completed_at = datetime.now()
-    
-    # Update statistics
     update_user_stats_on_quest_completed(current_user.id, quest.quest_type.value)
-    
-    # Commit stats batch to database
     commit_user_stats_batch(db)
-    
     db.commit()
     db.refresh(quest)
-    
-    # Return completion response
     return {
         "quest": {
             "id": quest.id,
@@ -221,7 +186,42 @@ def complete_quest(quest_id: int, current_user: User = Depends(get_current_user)
 @router.get("/daily/available", response_model=List[QuestOut])
 def get_available_daily_quests(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get available daily quests for the current user"""
-    return []
+    quests = db.query(Quest).filter(
+        Quest.owner_id == current_user.id,
+        Quest.is_main_daily_quest == True,
+        Quest.status.notin_([QuestStatus.COMPLETED, QuestStatus.FAILED])
+    ).order_by(Quest.created_at.desc()).all()
+    return quests
+
+def finalize_quest_completion(quest, user, db, subtasks=None):
+    """Helper to finalize quest completion and return response."""
+    if quest.status != QuestStatus.ACCEPTED:
+        raise HTTPException(status_code=400, detail="Quest is not accepted")
+    if not user.stats:
+        from ..models import UserStats
+        user_stats = UserStats(user_id=user.id)
+        db.add(user_stats)
+        db.commit()
+        db.refresh(user)
+    levels_gained = award_xp_and_level_up(user.stats, quest.xp_reward)
+    quest.status = QuestStatus.COMPLETED
+    quest.completed_at = datetime.now()
+    update_user_stats_on_quest_completed(user.id, quest.quest_type.value)
+    commit_user_stats_batch(db)
+    db.commit()
+    db.refresh(quest)
+    response = {
+        "message": "All subtasks completed and quest finished!" if subtasks else "Subtask completed and quest finished!",
+        "quest_completed": True,
+        "xp_gained": quest.xp_reward,
+        "levels_gained": levels_gained,
+        "new_xp": user.stats.xp_total,
+        "new_level": user.stats.level,
+        "level_progress": get_level_progress(user.stats)
+    }
+    if subtasks is not None:
+        response["subtasks_completed"] = len(subtasks)
+    return response
 
 @router.post("/{quest_id}/subtasks/{subtask_id}/complete")
 def complete_subtask(quest_id: int, subtask_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -229,64 +229,17 @@ def complete_subtask(quest_id: int, subtask_id: int, current_user: User = Depend
     quest = db.query(Quest).filter(Quest.id == quest_id, Quest.owner_id == current_user.id).first()
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
-    
     subtask = db.query(QuestSubtask).filter(QuestSubtask.id == subtask_id, QuestSubtask.quest_id == quest_id).first()
     if not subtask:
         raise HTTPException(status_code=404, detail="Subtask not found")
-    
     if subtask.is_completed:
         raise HTTPException(status_code=400, detail="Subtask is already completed")
-    
-    # Mark subtask as completed
     subtask.is_completed = True
-    subtask.completed_value = subtask.goal_value or 1  # Set to goal value or 1 if boolean
-    
-    # Check if all subtasks are completed
+    subtask.completed_value = subtask.goal_value or 1
     all_subtasks = db.query(QuestSubtask).filter(QuestSubtask.quest_id == quest_id).all()
     all_completed = all(all_subtask.is_completed for all_subtask in all_subtasks)
-    
     if all_completed:
-        # Complete the entire quest
-        if quest.is_main_daily_quest:
-            if quest.status != QuestStatus.PENDING:
-                raise HTTPException(status_code=400, detail="Daily quest is not pending")
-        else:
-            if quest.status != QuestStatus.ACCEPTED:
-                raise HTTPException(status_code=400, detail="Quest is not accepted")
-        
-        # Ensure user has stats
-        if not current_user.stats:
-            from ..models import UserStats
-            user_stats = UserStats(user_id=current_user.id)
-            db.add(user_stats)
-            db.commit()
-            db.refresh(current_user)
-        
-        # Award XP and handle level-ups
-        levels_gained = award_xp_and_level_up(current_user.stats, quest.xp_reward)
-        
-        # Update quest status
-        quest.status = QuestStatus.COMPLETED
-        quest.completed_at = datetime.now()
-        
-        # Update statistics
-        update_user_stats_on_quest_completed(current_user.id, quest.quest_type.value)
-        
-        # Commit stats batch to database
-        commit_user_stats_batch(db)
-        
-        db.commit()
-        db.refresh(quest)
-        
-        return {
-            "message": "Subtask completed and quest finished!",
-            "quest_completed": True,
-            "xp_gained": quest.xp_reward,
-            "levels_gained": levels_gained,
-            "new_xp": current_user.stats.xp_total,
-            "new_level": current_user.stats.level,
-            "level_progress": get_level_progress(current_user.stats)
-        }
+        return finalize_quest_completion(quest, current_user, db)
     else:
         db.commit()
         return {
@@ -302,58 +255,14 @@ def complete_all_subtasks(quest_id: int, current_user: User = Depends(get_curren
     quest = db.query(Quest).filter(Quest.id == quest_id, Quest.owner_id == current_user.id).first()
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
-    
-    # Check if quest can be completed
-    if quest.is_main_daily_quest:
-        if quest.status != QuestStatus.PENDING:
-            raise HTTPException(status_code=400, detail="Daily quest is not pending")
-    else:
-        if quest.status != QuestStatus.ACCEPTED:
-            raise HTTPException(status_code=400, detail="Quest is not accepted")
-    
-    # Get all subtasks
+    if quest.status != QuestStatus.ACCEPTED:
+        raise HTTPException(status_code=400, detail="Quest is not accepted")
     subtasks = db.query(QuestSubtask).filter(QuestSubtask.quest_id == quest_id).all()
     if not subtasks:
         raise HTTPException(status_code=400, detail="Quest has no subtasks")
-    
-    # Mark all subtasks as completed
     for subtask in subtasks:
         if not subtask.is_completed:
             subtask.is_completed = True
             subtask.completed_value = subtask.goal_value or 1
-    
-    # Ensure user has stats
-    if not current_user.stats:
-        from ..models import UserStats
-        user_stats = UserStats(user_id=current_user.id)
-        db.add(user_stats)
-        db.commit()
-        db.refresh(current_user)
-    
-    # Award XP and handle level-ups
-    levels_gained = award_xp_and_level_up(current_user.stats, quest.xp_reward)
-    
-    # Update quest status
-    quest.status = QuestStatus.COMPLETED
-    quest.completed_at = datetime.now()
-    
-    # Update statistics
-    update_user_stats_on_quest_completed(current_user.id, quest.quest_type.value)
-    
-    # Commit stats batch to database
-    commit_user_stats_batch(db)
-    
-    db.commit()
-    db.refresh(quest)
-    
-    return {
-        "message": "All subtasks completed and quest finished!",
-        "quest_completed": True,
-        "subtasks_completed": len(subtasks),
-        "xp_gained": quest.xp_reward,
-        "levels_gained": levels_gained,
-        "new_xp": current_user.stats.xp_total,
-        "new_level": current_user.stats.level,
-        "level_progress": get_level_progress(current_user.stats)
-    }
+    return finalize_quest_completion(quest, current_user, db, subtasks=subtasks)
 

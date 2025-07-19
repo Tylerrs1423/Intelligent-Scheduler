@@ -5,9 +5,26 @@ import enum
 from datetime import datetime
 from typing import Optional
 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
+from sqlalchemy.ext.mutable import MutableList
+
+# Core Pillars (broad categories) for theme_tags
+THEME_CATEGORIES = {
+    "Fitness": ["Movement", "Strength Training", "Stretching", "Cardio", "Steps"],
+    "Mental Health": ["Meditation", "Journaling", "Mindfulness", "Gratitude", "Emotional Check-in"],
+    "Learning & Growth": ["Reading", "Study", "Practice", "Skill Building", "Projects"],
+    "Focus & Productivity": ["Deep Work", "Time Blocking", "Task Management", "Distraction Reduction", "Pomodoro"],
+    "Breaking Bad Habits": ["Reduce Scrolling", "Nail Biting", "Hair Pulling", "Avoid Procrastination", "Impulse Control"],
+    "Creativity": ["Writing", "Music", "Art", "Photography", "Creative Projects"],
+    "Career & Development": ["Interview Practice", "Resume Improvement", "Networking", "Portfolio", "Certifications"],
+    "Life Management": ["Cleaning", "Errands", "Meal Prep", "Budgeting", "Planning"]
+}
+
+
+
+
 
 class UserRole(str, enum.Enum):
-    USER = "user"
+    USER= "user"
     ADMIN = "admin"
 
 
@@ -61,6 +78,16 @@ class TaskType(str, enum.Enum):
     # WEEKLY_SUMMARY = "WEEKLY_SUMMARY"
     # REMINDER = "REMINDER"
 
+class UserIntensityProfile(str, enum.Enum):
+    """
+    Intensity profile for user questing habits.
+    - chill: 1–2 quests/day, low to medium difficulty, optional reminders
+    - steady: 2–4 quests/day, mixed difficulty, consistent scheduling
+    - hardcore: 4–6 quests/day, frequent Tier 3+ quests, streaks and penalties emphasized
+    """
+    CHILL = "chill"
+    STEADY = "steady"
+    HARDCORE = "hardcore"
 
 goals_quests = Table(
     "goals_quests",
@@ -119,6 +146,23 @@ class UserStats(Base):
     # Timestamps
     stats_updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+class UserQuestPreference(Base):
+    __tablename__ = "user_quest_preferences"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), unique=True)
+    user = relationship("User", back_populates="quest_preference", uselist=False)
+
+    preffered_difficulty: Mapped[str] = mapped_column(Enum(QuestDifficulty), default=QuestDifficulty.TIER_1)
+    user_intensity_profile: Mapped[str] = mapped_column(Enum(UserIntensityProfile), default=UserIntensityProfile.STEADY)
+    preferred_daily_quest_time: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)
+    theme_tags: Mapped[Optional[list[str]]] = mapped_column(MutableList.as_mutable(SQLiteJSON), default=list)
+    preferred_quest_times: Mapped[Optional[list[dict]]] = mapped_column(MutableList.as_mutable(SQLiteJSON), default=list)
+    goal_intent_paragraph: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    timezone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 
 
 class Goal(Base):
@@ -173,6 +217,9 @@ class Quest(Base):
 
     owner_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
     
+    
+    theme_tags: Mapped[Optional[list[str]]] = mapped_column(MutableList.as_mutable(SQLiteJSON), default=list)
+
     # Relationships
     owner = relationship("User", back_populates="quests")
     goals = relationship("Goal", secondary=goals_quests, back_populates="quests")
@@ -229,18 +276,6 @@ class MainDailyQuestSubtaskTemplate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-class UserQuestPreference(Base):
-    __tablename__ = "user_quest_preferences"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), unique=True)
-    user = relationship("User", back_populates="quest_preference", uselist=False)
-
-    preferred_time: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)
-    theme_tags: Mapped[Optional[list]] = mapped_column(SQLiteJSON, default=list)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    timezone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class ScheduledTask(Base):
     __tablename__ = "scheduled_tasks"
@@ -254,3 +289,4 @@ class ScheduledTask(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     user: Mapped["User"] = relationship(back_populates="scheduled_tasks")
+

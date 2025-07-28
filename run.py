@@ -29,5 +29,5 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
         reload_dirs=["app"],  # Watch the app directory for changes
-        log_level="info"
+        log_level="debug"
     ) 

@@ -1,7 +1,9 @@
 from pydantic import BaseModel, Field, EmailStr
 from datetime import datetime, time
-from typing import Optional, List
-from .models import UserRole, QuestStatus, QuestType, QuestDifficulty, MeasurementType, UserIntensityProfile
+from typing import Optional, List, Tuple
+from .models import UserRole, QuestStatus, QuestType, QuestDifficulty, MeasurementType, UserIntensityProfile, GoalStatus, SourceType, PriorityLevel, EventType, EventMood, PreferredTimeOfDay, TaskDifficulty
+
+
 
 class DailyQuestGoal(BaseModel):
     title: str
@@ -19,15 +21,24 @@ class DailyQuestGoals(BaseModel):
 class UserBase(BaseModel):
     username: str
     email: EmailStr
+    sleep_start: Optional[time] = None
+    sleep_end: Optional[time] = None
+    max_daily_hours: Optional[float] = 8.0
 
 class UserCreate(UserBase):
     password: str
+    sleep_start: Optional[time] = None
+    sleep_end: Optional[time] = None
+    max_daily_hours: Optional[float] = 8.0
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
     email: Optional[EmailStr] = None
     daily_quest_time: Optional[datetime] = None
     daily_quest_goals: Optional[List[DailyQuestGoal]] = None
+    sleep_start: Optional[time] = None
+    sleep_end: Optional[time] = None
+    max_daily_hours: Optional[float] = None
 
 class UserStatsSchema(BaseModel):
     xp_total: int
@@ -53,6 +64,9 @@ class UserSchema(UserBase):
     is_active: bool
     role: UserRole
     stats: Optional[UserStatsSchema] = None
+    sleep_start: Optional[time] = None
+    sleep_end: Optional[time] = None
+    max_daily_hours: Optional[float] = None
     
     class Config:
         from_attributes = True
@@ -85,6 +99,9 @@ class UserInfo(BaseModel):
     role: UserRole
     xp: int
     level: int
+    sleep_start: Optional[time] = None
+    sleep_end: Optional[time] = None
+    max_daily_hours: Optional[float] = None
     
     class Config:
         from_attributes = True
@@ -105,13 +122,68 @@ class QuestCompletionResponse(BaseModel):
     new_level: int
     level_progress: LevelProgress
 
-class GoalCreate(BaseModel):
+
+# ----------------- Subgoal Schemas ---------------------
+
+class SubgoalCreate(BaseModel):
     title: str
     description: Optional[str] = ""
 
+class SubgoalOut(BaseModel):
+    id: int
+    title: str
+    description: str
+    created_at: datetime
+    updated_at: datetime
+    goal_id: int
+    is_completed: bool
+
+    class Config:
+        from_attributes = True
+
+# ----------------- Goal Schemas ---------------------
+class GoalCreate(BaseModel):
+    title: str
+    preferred_time_of_day: Optional[PreferredTimeOfDay] = None
+    difficulty: Optional[TaskDifficulty] = None
+    expected_duration: Optional[int] = None  # in minutes
+    description: Optional[str] = None
+    subgoals: Optional[List[str]] = None
+    deadline: Optional[datetime] = None
+    frequency: Optional[str] = None  # e.g., '3 times this week', 'Daily', 'Every Monday'
+    priority: Optional[PriorityLevel] = PriorityLevel.MEDIUM
+    # Advanced (hidden by default)
+    exact_times: Optional[List[datetime]] = None  # e.g., ["2024-07-01T07:00:00"]
+    preferred_time_windows: Optional[List[Tuple[time, time]]] = None  # e.g., [(time(18,0), time(21,0))]
+    duration_range: Optional[Tuple[int, int]] = None  # (min_minutes, max_minutes)
+    repeat_rules: Optional[str] = None  # RRULE string
+    buffer_before: Optional[int] = None  # minutes
+    buffer_after: Optional[int] = None  # minutes
+    constraints: Optional[str] = None  # e.g., 'Never on weekends', or specific days
+    depends_on_event_id: Optional[int] = None
+    depends_on_goal_id: Optional[int] = None
+    location_tag: Optional[str] = None  # e.g., 'Home', 'Work', 'Gym'
+
 class GoalUpdate(BaseModel):
     title: Optional[str] = None
+    preferred_time_of_day: Optional[PreferredTimeOfDay] = None
+    difficulty: Optional[TaskDifficulty] = None
+    expected_duration: Optional[int] = None
     description: Optional[str] = None
+    subgoals: Optional[List[str]] = None
+    deadline: Optional[datetime] = None
+    frequency: Optional[str] = None
+    priority: Optional[PriorityLevel] = None
+    exact_times: Optional[List[datetime]] = None
+    preferred_time_windows: Optional[List[Tuple[time, time]]] = None
+    duration_range: Optional[Tuple[int, int]] = None
+    repeat_rules: Optional[str] = None
+    buffer_before: Optional[int] = None
+    buffer_after: Optional[int] = None
+    constraints: Optional[str] = None
+    depends_on_event_id: Optional[int] = None
+    depends_on_goal_id: Optional[int] = None
+    location_tag: Optional[str] = None
 
 class GoalOut(BaseModel):
     id: int
@@ -119,12 +191,21 @@ class GoalOut(BaseModel):
     description: str
     created_at: datetime
     updated_at: datetime
-    owner_id: int
+    user_id: int
+    priority: Optional[int]
+    difficulty: TaskDifficulty
+    estimated_duration_minutes: Optional[int]
+    due_date: Optional[datetime]
+    status: GoalStatus
+    subgoals: List[SubgoalOut] = []
 
     class Config:
         from_attributes = True
 
-# Quests
+
+
+
+# ----------------- Quest Schemas ---------------------
 class QuestCreate(BaseModel):
     title: str
     description: str
@@ -133,12 +214,60 @@ class QuestCreate(BaseModel):
     goal_id: Optional[int] = None  # Optional goal relationship
     theme_tags: Optional[List[str]] = Field(default_factory=list, description="Theme tags for this quest")
     
-    # Time-based fields (only for timed quests)
+    # Scheduling fields
+    priority: int = 2  # Default to MEDIUM priority
+    due_at: Optional[datetime] = None
+    preferred_time_of_day: PreferredTimeOfDay = PreferredTimeOfDay.NO_PREFERENCE
+    duration_minutes: Optional[int] = None
+    
+    # Chunking fields
+    chunk_index: int = 1
+    chunk_count: int = 1
+    is_chunked: bool = False
+    base_title: Optional[str] = None
+    
+    # Recurrence field - RRULE string (RFC 5545 standard)
+    recurrence_rule: Optional[str] = None  # RRULE string for recurrence patterns
+    
+    # Buffer fields
+    buffer_before: int = 0
+    buffer_after: int = 0
+    
+    # Scheduling flexibility
+    strict: bool = False  # If True, cannot be moved to different days
+    
+    # Time window constraints (for AI scheduling)
+    soft_start: Optional[time] = None  # Preferred start time (soft limit)
+    soft_end: Optional[time] = None    # Preferred end time (soft limit)
+    hard_start: Optional[time] = None  # Must start after this time (hard limit)
+    hard_end: Optional[time] = None    # Must end before this time (hard limit)
+    
+    # Time-based fields (legacy - only for timed quests)
     completion_deadline: Optional[datetime] = None
     time_limit_minutes: Optional[int] = None
 
 class QuestUpdate(BaseModel):
     status: Optional[QuestStatus] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    priority: Optional[int] = None
+    due_at: Optional[datetime] = None
+    preferred_time_of_day: Optional[PreferredTimeOfDay] = None
+    duration_minutes: Optional[int] = None
+    chunk_index: Optional[int] = None
+    chunk_count: Optional[int] = None
+    is_chunked: Optional[bool] = None
+    base_title: Optional[str] = None
+    recurrence_rule: Optional[str] = None
+    buffer_before: Optional[int] = None
+    buffer_after: Optional[int] = None
+    strict: Optional[bool] = None
+    
+    # Time window constraints (for AI scheduling)
+    soft_start: Optional[time] = None
+    soft_end: Optional[time] = None
+    hard_start: Optional[time] = None
+    hard_end: Optional[time] = None
 
 class QuestOut(BaseModel):
     id: int
@@ -153,7 +282,35 @@ class QuestOut(BaseModel):
     owner_id: int
     theme_tags: List[str] = Field(default_factory=list, description="Theme tags for this quest")
     
-    # Time-based fields (only for timed quests)
+    # Scheduling fields
+    priority: int
+    due_at: Optional[datetime]
+    preferred_time_of_day: PreferredTimeOfDay
+    duration_minutes: Optional[int]
+    
+    # Chunking fields
+    chunk_index: int
+    chunk_count: int
+    is_chunked: bool
+    base_title: Optional[str]
+    
+    # Recurrence field - RRULE string (RFC 5545 standard)
+    recurrence_rule: Optional[str]
+    
+    # Buffer fields
+    buffer_before: int
+    buffer_after: int
+    
+    # Scheduling flexibility
+    strict: bool
+    
+    # Time window constraints (for AI scheduling)
+    soft_start: Optional[time]
+    soft_end: Optional[time]
+    hard_start: Optional[time]
+    hard_end: Optional[time]
+    
+    # Time-based fields (legacy - only for timed quests)
     deadline: Optional[datetime]
     time_limit_minutes: Optional[int]
     repeatable: bool
@@ -175,7 +332,7 @@ class SubtaskOut(BaseModel):
     measurement_type: MeasurementType
     goal_value: Optional[int]
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class DailyTemplateIn(BaseModel):
     title: str
@@ -192,7 +349,7 @@ class DailyTemplateOut(BaseModel):
     updated_at: datetime
     subtasks: List[SubtaskOut]
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class UserQuestPreferenceIn(BaseModel):
     preferred_daily_quest_time: Optional[str] = Field(None, description="Time of day in HH:MM format for daily quest")
@@ -229,4 +386,98 @@ class ThemeTagIn(BaseModel):
 
 class ThemeTagListOut(BaseModel):
     theme_tags: List[str]
+
+class EventCreate(BaseModel):
+    title: str
+    description: Optional[str] = ""
+    start_time: datetime
+    end_time: datetime
+    event_type: Optional[EventType] = EventType.FIXED
+    source: Optional[SourceType] = None
+    source_id: Optional[int] = None
+    earliest_start: Optional[datetime] = None
+    latest_end: Optional[datetime] = None
+    priority: Optional[PriorityLevel] = PriorityLevel.MEDIUM
+    allowed_days: Optional[List[int]] = None
+    soft_start: Optional[time] = None
+    soft_end: Optional[time] = None
+    hard_start: Optional[time] = None
+    hard_end: Optional[time] = None
+    min_duration: Optional[int] = None
+    max_duration: Optional[int] = None
+    buffer_before: Optional[int] = None
+    buffer_after: Optional[int] = None
+    recurrence_rule: Optional[str] = None
+    tags: Optional[List[str]] = None
+    category: Optional[str] = None
+    depends_on_event_id: Optional[int] = None
+    depends_on_quest_id: Optional[int] = None
+    mood: Optional[EventMood] = None
+    max_moves: Optional[int] = None
+    moves_count: int = 0
+
+class EventUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    event_type: Optional[EventType] = None
+    source: Optional[SourceType] = None
+    source_id: Optional[int] = None
+    earliest_start: Optional[datetime] = None
+    latest_end: Optional[datetime] = None
+    priority: Optional[PriorityLevel] = None
+    allowed_days: Optional[List[int]] = None
+    soft_start: Optional[time] = None
+    soft_end: Optional[time] = None
+    hard_start: Optional[time] = None
+    hard_end: Optional[time] = None
+    min_duration: Optional[int] = None
+    max_duration: Optional[int] = None
+    buffer_before: Optional[int] = None
+    buffer_after: Optional[int] = None
+    recurrence_rule: Optional[str] = None
+    tags: Optional[List[str]] = None
+    category: Optional[str] = None
+    depends_on_event_id: Optional[int] = None
+    depends_on_quest_id: Optional[int] = None
+    mood: Optional[EventMood] = None
+    max_moves: Optional[int] = None
+    moves_count: Optional[int] = None
+
+class EventOut(BaseModel):
+    id: int
+    user_id: int
+    title: str
+    description: Optional[str]
+    start_time: datetime
+    end_time: datetime
+    event_type: EventType
+    source: Optional[SourceType]
+    source_id: Optional[int]
+    earliest_start: Optional[datetime]
+    latest_end: Optional[datetime]
+    priority: PriorityLevel
+    created_at: datetime
+    updated_at: datetime
+    allowed_days: Optional[List[int]]
+    soft_start: Optional[time]
+    soft_end: Optional[time]
+    hard_start: Optional[time]
+    hard_end: Optional[time]
+    min_duration: Optional[int]
+    max_duration: Optional[int]
+    buffer_before: Optional[int]
+    buffer_after: Optional[int]
+    recurrence_rule: Optional[str]
+    tags: Optional[List[str]]
+    category: Optional[str]
+    depends_on_event_id: Optional[int]
+    depends_on_quest_id: Optional[int]
+    mood: Optional[EventMood]
+    max_moves: Optional[int]
+    moves_count: int
+
+    class Config:
+        from_attributes = True
 

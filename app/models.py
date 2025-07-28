@@ -1,11 +1,14 @@
-from sqlalchemy import String, Integer, Boolean, Enum, ForeignKey, DateTime, JSON, Text, Table, Column, UniqueConstraint, Time
+from sqlalchemy import (
+    String, Integer, Boolean, Enum, ForeignKey, DateTime, Interval, Table, Column, UniqueConstraint, Time, ARRAY, Float
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from .database import Base
-import enum
-from datetime import datetime
-from typing import Optional
 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from sqlalchemy.ext.mutable import MutableList
+from datetime import datetime, timedelta
+from typing import Optional, List
+from .database import Base
+import enum
+from pydantic import BaseModel
 
 # Core Pillars (broad categories) for theme_tags
 THEME_CATEGORIES = {
@@ -19,14 +22,11 @@ THEME_CATEGORIES = {
     "Life Management": ["Cleaning", "Errands", "Meal Prep", "Budgeting", "Planning"]
 }
 
-
-
-
+# Enums
 
 class UserRole(str, enum.Enum):
-    USER= "user"
+    USER = "user"
     ADMIN = "admin"
-
 
 class QuestStatus(str, enum.Enum):
     STANDING_BY = "standing_by"
@@ -64,6 +64,17 @@ class QuestDifficulty(str, enum.Enum):
     TIER_4 = "TIER_4"
     TIER_5 = "TIER_5"
 
+class GoalStatus(str, enum.Enum):
+    NOT_STARTED = "NOT_STARTED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+
+class PriorityLevel(int, enum.Enum):
+    LOW = 1
+    MEDIUM = 2
+    HIGH = 3
+    URGENT = 4
+
 class MeasurementType(str, enum.Enum):
     TIME = "time"
     REPS = "reps"
@@ -74,21 +85,52 @@ class MeasurementType(str, enum.Enum):
 
 class TaskType(str, enum.Enum):
     DAILY_QUEST = "DAILY_QUEST"
-    # Add more task types as needed, e.g.:
-    # WEEKLY_SUMMARY = "WEEKLY_SUMMARY"
-    # REMINDER = "REMINDER"
+    # Extend as needed
 
 class UserIntensityProfile(str, enum.Enum):
-    """
-    Intensity profile for user questing habits.
-    - chill: 1–2 quests/day, low to medium difficulty, optional reminders
-    - steady: 2–4 quests/day, mixed difficulty, consistent scheduling
-    - hardcore: 4–6 quests/day, frequent Tier 3+ quests, streaks and penalties emphasized
-    """
     CHILL = "chill"
     STEADY = "steady"
     HARDCORE = "hardcore"
 
+class SourceType(str, enum.Enum):
+    GOAL = "goal"
+    SUBGOAL = "subgoal"
+    QUEST = "quest"
+    MANUAL = "manual"
+
+class EventType(str, enum.Enum):
+    FIXED = "fixed"
+    FLEXIBLE = "flexible"
+
+class EventMood(str, enum.Enum):
+    FUN = "fun"
+    STRESSFUL = "stressful"
+    RELAXING = "relaxing"
+    FOCUS = "focus"
+    SOCIAL = "social"
+    IMPORTANT = "important"
+    OTHER = "other"
+
+class PreferredTimeOfDay(str, enum.Enum):
+    MORNING = "morning"      # 6:00 AM - 12:00 PM
+    AFTERNOON = "afternoon"  # 12:00 PM - 6:00 PM
+    EVENING = "evening"      # 6:00 PM - 11:00 PM
+    NO_PREFERENCE = "no_preference"  # Any time
+
+class TaskDifficulty(str, enum.Enum):
+    EASY = "easy"           # 1-2 hours, low mental effort
+    MEDIUM = "medium"       # 2-4 hours, moderate effort
+    HARD = "hard"           # 4-6 hours, high effort
+    VERY_HARD = "very_hard" # 6+ hours, very high effort
+    UNKNOWN = "unknown"     # Not yet determined
+
+# FrequencyType removed - using RRULE as the primary recurrence engine
+
+# We'll use dateutil.rrule instead of custom RecurrenceRule class
+# The recurrence_rule field in Quest will store RRULE strings
+# and we'll use dateutil.rrule to parse and expand them
+
+# Association table for many-to-many goals ↔ quests
 goals_quests = Table(
     "goals_quests",
     Base.metadata,
@@ -96,64 +138,73 @@ goals_quests = Table(
     Column("quest_id", Integer, ForeignKey("quests.id"), primary_key=True),
 )
 
+# Models
 
 class User(Base):
     __tablename__ = "users"
-    
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String, unique=True, index=True)
     email: Mapped[str] = mapped_column(String, unique=True, index=True)
-    hashed_password: Mapped[str]
+    name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    hashed_password: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    role: Mapped[str] = mapped_column(Enum(UserRole), default=UserRole.USER)
-    
+    role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.USER)
+
+    sleep_start: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)
+    sleep_end: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)
+    max_daily_hours: Mapped[float] = mapped_column(Float, default=8.0)  # Max hours per day
+
     # Relationships
     goals = relationship("Goal", back_populates="owner")
     quests = relationship("Quest", back_populates="owner")
     stats = relationship("UserStats", back_populates="user", uselist=False)
-    quest_preference: Mapped["UserQuestPreference"] = relationship("UserQuestPreference", back_populates="user", uselist=False)
-    scheduled_tasks: Mapped[list["ScheduledTask"]] = relationship("ScheduledTask", back_populates="user")
+    quest_preference = relationship("UserQuestPreference", back_populates="user", uselist=False)
+    scheduled_tasks = relationship("ScheduledTask", back_populates="user")
+    google_token = relationship("GoogleOAuthToken", back_populates="user", uselist=False)
+    
 
 class UserStats(Base):
     __tablename__ = "user_stats"
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     user = relationship("User", back_populates="stats")
-    
-    # XP-locked leveling fields
-    xp_total: Mapped[int] = mapped_column(Integer, default=0)  # Total XP ever earned
-    xp_since_last_level: Mapped[int] = mapped_column(Integer, default=0)  # Progress in current level
-    xp_needed_for_next: Mapped[int] = mapped_column(Integer, default=100)  # XP required for next level
-    level: Mapped[int] = mapped_column(Integer, default=1)  # Current level
-    
-    # Quest statistics
+
+    # XP & Leveling
+    xp_total: Mapped[int] = mapped_column(Integer, default=0)
+    xp_since_last_level: Mapped[int] = mapped_column(Integer, default=0)
+    xp_needed_for_next: Mapped[int] = mapped_column(Integer, default=100)
+    level: Mapped[int] = mapped_column(Integer, default=1)
+
+    # Quest stats
     total_quests_created: Mapped[int] = mapped_column(Integer, default=0)
     total_quests_accepted: Mapped[int] = mapped_column(Integer, default=0)
     total_quests_rejected: Mapped[int] = mapped_column(Integer, default=0)
     total_quests_completed: Mapped[int] = mapped_column(Integer, default=0)
     total_quests_failed: Mapped[int] = mapped_column(Integer, default=0)
-    
-    # Goal statistics
+
+    # Goal stats
     total_goals_created: Mapped[int] = mapped_column(Integer, default=0)
     total_goals_completed: Mapped[int] = mapped_column(Integer, default=0)
-    
-    # Quest type statistics
+
+    # Quest type stats
     daily_quests_completed: Mapped[int] = mapped_column(Integer, default=0)
     penalty_quests_completed: Mapped[int] = mapped_column(Integer, default=0)
     timed_quests_completed: Mapped[int] = mapped_column(Integer, default=0)
     hidden_quests_completed: Mapped[int] = mapped_column(Integer, default=0)
-    
-    # Timestamps
+
     stats_updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class UserQuestPreference(Base):
     __tablename__ = "user_quest_preferences"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), unique=True)
-    user = relationship("User", back_populates="quest_preference", uselist=False)
 
-    preffered_difficulty: Mapped[str] = mapped_column(Enum(QuestDifficulty), default=QuestDifficulty.TIER_1)
-    user_intensity_profile: Mapped[str] = mapped_column(Enum(UserIntensityProfile), default=UserIntensityProfile.STEADY)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    user = relationship("User", back_populates="quest_preference")
+
+    preferred_difficulty: Mapped[QuestDifficulty] = mapped_column(Enum(QuestDifficulty), default=QuestDifficulty.TIER_1)
+    user_intensity_profile: Mapped[UserIntensityProfile] = mapped_column(Enum(UserIntensityProfile), default=UserIntensityProfile.STEADY)
     preferred_daily_quest_time: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)
     theme_tags: Mapped[Optional[list[str]]] = mapped_column(MutableList.as_mutable(SQLiteJSON), default=list)
     preferred_quest_times: Mapped[Optional[list[dict]]] = mapped_column(MutableList.as_mutable(SQLiteJSON), default=list)
@@ -163,86 +214,127 @@ class UserQuestPreference(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-
-
 class Goal(Base):
-    """Goals that quests can be associated with"""
     __tablename__ = "goals"
-    
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+
     title: Mapped[str] = mapped_column(String, index=True)
     description: Mapped[str] = mapped_column(String)
-    owner_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
-    
+
+    status: Mapped[GoalStatus] = mapped_column(Enum(GoalStatus), default=GoalStatus.NOT_STARTED)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    priority: Mapped[PriorityLevel] = mapped_column(Enum(PriorityLevel), default=PriorityLevel.MEDIUM)
+    difficulty: Mapped[TaskDifficulty] = mapped_column(Enum(TaskDifficulty), default=TaskDifficulty.UNKNOWN)
+    estimated_duration: Mapped[Optional[timedelta]] = mapped_column(Interval, nullable=True)
+    due_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
     
     # Relationships
-    owner = relationship("User")
+    owner = relationship("User", back_populates="goals")
     quests = relationship("Quest", secondary=goals_quests, back_populates="goals")
+    subgoals = relationship("GoalSubgoal", back_populates="goal", cascade="all, delete-orphan")
+
+class Subgoal(Base):
+    __tablename__ = "subgoals"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    goal_id: Mapped[int] = mapped_column(Integer, ForeignKey("goals.id"))
+    
+    title: Mapped[str] = mapped_column(String, index=True)
+    description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    is_completed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    goal = relationship("Goal", back_populates="subgoals")
 
 class Quest(Base):
     __tablename__ = "quests"
-    
-    # Basic quest information
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     title: Mapped[str] = mapped_column(String, index=True)
     description: Mapped[str] = mapped_column(String)
-    
-    # Quest type and difficulty
-    quest_type: Mapped[str] = mapped_column(Enum(QuestType), default=QuestType.REGULAR)
-    difficulty: Mapped[str] = mapped_column(Enum(QuestDifficulty), default=QuestDifficulty.TIER_1)
-    
-    # Quest Timing After Sent Out
+
+    quest_type: Mapped[QuestType] = mapped_column(Enum(QuestType), default=QuestType.REGULAR)
+    difficulty: Mapped[QuestDifficulty] = mapped_column(Enum(QuestDifficulty), default=QuestDifficulty.TIER_1)
+
     sent_out_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     time_limit_to_accept: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     time_limit_to_complete: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    # Quest details
     xp_reward: Mapped[int] = mapped_column(Integer, default=10)
     deadline: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     time_limit_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     repeatable: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # Status and timestamps
-    status: Mapped[str] = mapped_column(Enum(QuestStatus), default=QuestStatus.PENDING)
+    status: Mapped[QuestStatus] = mapped_column(Enum(QuestStatus), default=QuestStatus.PENDING)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     is_main_daily_quest: Mapped[bool] = mapped_column(Boolean, default=False)
-    
-    template_id = mapped_column(Integer, ForeignKey("main_daily_quest_templates.id"))
-    
 
-    owner_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
-    
-    
+    template_id: Mapped[Optional[int]] = mapped_column(ForeignKey("main_daily_quest_templates.id"), nullable=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
     theme_tags: Mapped[Optional[list[str]]] = mapped_column(MutableList.as_mutable(SQLiteJSON), default=list)
+
+    # Scheduling fields (merged from QuestInstance)
+    priority: Mapped[int] = mapped_column(Integer, default=2)  # Default to MEDIUM priority
+    due_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    preferred_time_of_day: Mapped[PreferredTimeOfDay] = mapped_column(Enum(PreferredTimeOfDay), default=PreferredTimeOfDay.NO_PREFERENCE)
+    duration_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Use this instead of time_limit_minutes
+    
+    # Chunking fields
+    chunk_index: Mapped[int] = mapped_column(Integer, default=1)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=1)
+    is_chunked: Mapped[bool] = mapped_column(Boolean, default=False)
+    base_title: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # Original title for chunked quests
+    
+    # Recurrence field - RRULE string (RFC 5545 standard)
+    recurrence_rule: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # RRULE string for recurrence patterns
+    
+    # Buffer fields
+    buffer_before: Mapped[int] = mapped_column(Integer, default=0)  # minutes
+    buffer_after: Mapped[int] = mapped_column(Integer, default=0)   # minutes
+    
+    # Scheduling flexibility
+    strict: Mapped[bool] = mapped_column(Boolean, default=False)  # If True, cannot be moved to different days
+    
+    # Time window constraints (for AI scheduling)
+    soft_start: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)  # Preferred start time (soft limit)
+    soft_end: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)    # Preferred end time (soft limit)
+    hard_start: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)  # Must start after this time (hard limit)
+    hard_end: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)    # Must end before this time (hard limit)
 
     # Relationships
     owner = relationship("User", back_populates="quests")
-    goals = relationship("Goal", secondary=goals_quests, back_populates="quests")
+    quests_goals = relationship("Goal", secondary=goals_quests, back_populates="quests")
     subtasks = relationship("QuestSubtask", cascade="all, delete-orphan", back_populates="quest")
     template = relationship("MainDailyQuestTemplate", back_populates="quests")
-    
+
 class QuestSubtask(Base):
     __tablename__ = "quest_subtasks"
-    
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    
-    quest_id: Mapped[int] = mapped_column(Integer, ForeignKey("quests.id"))
-   
-    
+    quest_id: Mapped[int] = mapped_column(ForeignKey("quests.id"))
+
     title: Mapped[str] = mapped_column(String, index=True)
     description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    
-    measurement_type: Mapped[str] = mapped_column(Enum(MeasurementType), default=MeasurementType.BOOLEAN)
-    goal_value: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # E.g., 50 reps
+
+    measurement_type: Mapped[MeasurementType] = mapped_column(Enum(MeasurementType), default=MeasurementType.BOOLEAN)
+    goal_value: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # e.g., 50 reps
     completed_value: Mapped[int] = mapped_column(Integer, default=0)
-    
+
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False)
-    
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -251,42 +343,99 @@ class QuestSubtask(Base):
 class MainDailyQuestTemplate(Base):
     __tablename__ = "main_daily_quest_templates"
     __table_args__ = (UniqueConstraint("user_id", "active", name="uq_user_active_template"),)
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     user = relationship("User")
+
     title: Mapped[str] = mapped_column(String, index=True)
     description: Mapped[str] = mapped_column(String)
     xp_reward: Mapped[int] = mapped_column(Integer, default=10)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
     subtasks = relationship("MainDailyQuestSubtaskTemplate", cascade="all, delete-orphan", back_populates="template")
     quests = relationship("Quest", back_populates="template")
 
 class MainDailyQuestSubtaskTemplate(Base):
     __tablename__ = "main_daily_quest_subtask_templates"
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    template_id: Mapped[int] = mapped_column(Integer, ForeignKey("main_daily_quest_templates.id"))
+    template_id: Mapped[int] = mapped_column(ForeignKey("main_daily_quest_templates.id"))
     template = relationship("MainDailyQuestTemplate", back_populates="subtasks")
-    
+
     title: Mapped[str] = mapped_column(String, index=True)
-    measurement_type: Mapped[str] = mapped_column(Enum(MeasurementType), default=MeasurementType.BOOLEAN)
-    goal_value: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # E.g., 50 reps
-       
+    measurement_type: Mapped[MeasurementType] = mapped_column(Enum(MeasurementType), default=MeasurementType.BOOLEAN)
+    goal_value: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
 
 class ScheduledTask(Base):
     __tablename__ = "scheduled_tasks"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     task_id: Mapped[str] = mapped_column(String, unique=True)
     scheduled_for: Mapped[datetime] = mapped_column(DateTime)
-    task_type: Mapped[str] = mapped_column(Enum(TaskType), default=TaskType.DAILY_QUEST)
-    active: Mapped[bool] = mapped_column(default=True)
+    task_type: Mapped[TaskType] = mapped_column(Enum(TaskType), default=TaskType.DAILY_QUEST)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="scheduled_tasks")
+
+
+class Event(Base):
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String, default="")
+    
+    start_time: Mapped[datetime] = mapped_column(nullable=False)
+    end_time: Mapped[datetime] = mapped_column(nullable=False)
+    
+    event_type: Mapped[EventType] = mapped_column(Enum(EventType), default=EventType.FIXED)
+    is_auto_generated: Mapped[bool] = mapped_column(default=False)
+    source: Mapped[Optional[SourceType]] = mapped_column(Enum(SourceType))  # 'goal', 'subgoal', 'quest', 'manual'
+    source_id: Mapped[Optional[int]] = mapped_column(Integer)  # e.g. the goal or quest ID
+    earliest_start: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    latest_end: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    priority: Mapped[PriorityLevel] = mapped_column(Enum(PriorityLevel), default=PriorityLevel.MEDIUM)
+    allowed_days: Mapped[Optional[list[int]]] = mapped_column(SQLiteJSON, nullable=True)
+    soft_start: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)
+    soft_end: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)
+    hard_start: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)
+    hard_end: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)
+    min_duration: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_duration: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    buffer_before: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    buffer_after: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    recurrence_rule: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    depends_on_event_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    depends_on_quest_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    mood: Mapped[Optional[EventMood]] = mapped_column(Enum(EventMood), nullable=True)
+    max_moves: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    moves_count: Mapped[int] = mapped_column(Integer, default=0)
+
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    user: Mapped["User"] = relationship(back_populates="scheduled_tasks")
+    user = relationship("User", back_populates="events")
 
+
+
+class GoogleOAuthToken(Base):
+    __tablename__ = "google_oauth_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    access_token: Mapped[str] = mapped_column(String, nullable=False)
+    refresh_token: Mapped[str] = mapped_column(String, nullable=False)
+    token_expiry: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    user = relationship("User", back_populates="google_token")

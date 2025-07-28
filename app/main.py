@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.security import HTTPBearer
 from app.database import engine
 from app.models import Base
-from app.routes import users, admin, goals, quests, templates, user_preferences
+from app.routes import users, admin, goals, quests, templates, user_preferences, google_oauth_router
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -21,6 +21,7 @@ app.include_router(quests.router, prefix="/quests", tags=["quests"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
 app.include_router(templates.router, prefix="/templates", tags=["templates"])
 app.include_router(user_preferences.router, tags=["user-preferences"])
+app.include_router(google_oauth_router)
 
 @app.get("/")
 def read_root():

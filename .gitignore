@@ -59,3 +59,31 @@ celerybeat.pid
 .DS_Store
 node_modules/
 
+# Redis dump files
+dump.rdb
+*.rdb
+
+# Test files
+test_*.py
+*_test.py
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+client_secret.json

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from requests_oauthlib import OAuth2Session
 
 from app.database import get_db
-from app.models import User, GoogleOAuthToken, Event, EventType, SourceType
+from app.models import User, GoogleOAuthToken, Event, SchedulingFlexibility, SourceType
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 
@@ -225,8 +225,7 @@ def sync_google_calendar_events(user_id: int = None, db: Session = Depends(get_d
             description=g_desc,
             start_time=start_dt,
             end_time=end_dt,
-            event_type=EventType.FIXED,
-            is_auto_generated=False,
+            scheduling_flexibility=SchedulingFlexibility.FIXED,
             source=SourceType.MANUAL,  # Or a new SourceType.GOOGLE if you want
             source_id=g_id,
         )

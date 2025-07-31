@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field, EmailStr
 from datetime import datetime, time
 from typing import Optional, List, Tuple
-from .models import UserRole, QuestStatus, QuestType, QuestDifficulty, MeasurementType, UserIntensityProfile, GoalStatus, SourceType, PriorityLevel, EventType, EventMood, PreferredTimeOfDay, TaskDifficulty
+from .models import UserRole, QuestStatus, QuestCategory, QuestGeneration, QuestType, QuestDifficulty, GoalStatus, PriorityLevel, MeasurementType, TaskType, UserIntensityProfile, SourceType, EventMood, PreferredTimeOfDay, TaskDifficulty, SchedulingFlexibility
 
 
 
@@ -234,13 +234,18 @@ class QuestCreate(BaseModel):
     buffer_after: int = 0
     
     # Scheduling flexibility
-    strict: bool = False  # If True, cannot be moved to different days
+    scheduling_flexibility: SchedulingFlexibility = SchedulingFlexibility.FLEXIBLE
     
     # Time window constraints (for AI scheduling)
     soft_start: Optional[time] = None  # Preferred start time (soft limit)
     soft_end: Optional[time] = None    # Preferred end time (soft limit)
     hard_start: Optional[time] = None  # Must start after this time (hard limit)
     hard_end: Optional[time] = None    # Must end before this time (hard limit)
+    
+    # Strict scheduling rule overrides
+    allow_time_deviation: bool = False      # Allow deviation from time preference
+    allow_urgent_override: bool = False     # Allow urgent deadline override
+    allow_same_day_recurring: bool = False  # Allow same-day recurring instances
     
     # Time-based fields (legacy - only for timed quests)
     completion_deadline: Optional[datetime] = None
@@ -261,13 +266,14 @@ class QuestUpdate(BaseModel):
     recurrence_rule: Optional[str] = None
     buffer_before: Optional[int] = None
     buffer_after: Optional[int] = None
-    strict: Optional[bool] = None
     
-    # Time window constraints (for AI scheduling)
-    soft_start: Optional[time] = None
-    soft_end: Optional[time] = None
-    hard_start: Optional[time] = None
-    hard_end: Optional[time] = None
+    # Strict scheduling rule overrides
+    allow_time_deviation: Optional[bool] = None      # Allow deviation from time preference
+    allow_urgent_override: Optional[bool] = None     # Allow urgent deadline override
+    allow_same_day_recurring: Optional[bool] = None  # Allow same-day recurring instances
+    
+    # Scheduling flexibility
+    scheduling_flexibility: Optional[SchedulingFlexibility] = None
 
 class QuestOut(BaseModel):
     id: int
@@ -302,13 +308,18 @@ class QuestOut(BaseModel):
     buffer_after: int
     
     # Scheduling flexibility
-    strict: bool
+    scheduling_flexibility: SchedulingFlexibility
     
     # Time window constraints (for AI scheduling)
     soft_start: Optional[time]
     soft_end: Optional[time]
     hard_start: Optional[time]
     hard_end: Optional[time]
+    
+    # Strict scheduling rule overrides
+    allow_time_deviation: bool
+    allow_urgent_override: bool
+    allow_same_day_recurring: bool
     
     # Time-based fields (legacy - only for timed quests)
     deadline: Optional[datetime]
@@ -389,16 +400,17 @@ class ThemeTagListOut(BaseModel):
 
 class EventCreate(BaseModel):
     title: str
-    description: Optional[str] = ""
+    description: str = ""
     start_time: datetime
     end_time: datetime
-    event_type: Optional[EventType] = EventType.FIXED
+    scheduling_flexibility: SchedulingFlexibility = SchedulingFlexibility.FIXED
+    is_auto_generated: bool = False
     source: Optional[SourceType] = None
     source_id: Optional[int] = None
     earliest_start: Optional[datetime] = None
     latest_end: Optional[datetime] = None
-    priority: Optional[PriorityLevel] = PriorityLevel.MEDIUM
-    allowed_days: Optional[List[int]] = None
+    priority: PriorityLevel = PriorityLevel.MEDIUM
+    allowed_days: Optional[list[int]] = None
     soft_start: Optional[time] = None
     soft_end: Optional[time] = None
     hard_start: Optional[time] = None
@@ -408,26 +420,24 @@ class EventCreate(BaseModel):
     buffer_before: Optional[int] = None
     buffer_after: Optional[int] = None
     recurrence_rule: Optional[str] = None
-    tags: Optional[List[str]] = None
-    category: Optional[str] = None
     depends_on_event_id: Optional[int] = None
     depends_on_quest_id: Optional[int] = None
     mood: Optional[EventMood] = None
     max_moves: Optional[int] = None
-    moves_count: int = 0
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    event_type: Optional[EventType] = None
+    scheduling_flexibility: Optional[SchedulingFlexibility] = None
+    is_auto_generated: Optional[bool] = None
     source: Optional[SourceType] = None
     source_id: Optional[int] = None
     earliest_start: Optional[datetime] = None
     latest_end: Optional[datetime] = None
     priority: Optional[PriorityLevel] = None
-    allowed_days: Optional[List[int]] = None
+    allowed_days: Optional[list[int]] = None
     soft_start: Optional[time] = None
     soft_end: Optional[time] = None
     hard_start: Optional[time] = None
@@ -437,30 +447,26 @@ class EventUpdate(BaseModel):
     buffer_before: Optional[int] = None
     buffer_after: Optional[int] = None
     recurrence_rule: Optional[str] = None
-    tags: Optional[List[str]] = None
-    category: Optional[str] = None
     depends_on_event_id: Optional[int] = None
     depends_on_quest_id: Optional[int] = None
     mood: Optional[EventMood] = None
     max_moves: Optional[int] = None
-    moves_count: Optional[int] = None
 
 class EventOut(BaseModel):
     id: int
     user_id: int
     title: str
-    description: Optional[str]
+    description: str
     start_time: datetime
     end_time: datetime
-    event_type: EventType
+    scheduling_flexibility: SchedulingFlexibility
+    is_auto_generated: bool
     source: Optional[SourceType]
     source_id: Optional[int]
     earliest_start: Optional[datetime]
     latest_end: Optional[datetime]
     priority: PriorityLevel
-    created_at: datetime
-    updated_at: datetime
-    allowed_days: Optional[List[int]]
+    allowed_days: Optional[list[int]]
     soft_start: Optional[time]
     soft_end: Optional[time]
     hard_start: Optional[time]
@@ -470,13 +476,13 @@ class EventOut(BaseModel):
     buffer_before: Optional[int]
     buffer_after: Optional[int]
     recurrence_rule: Optional[str]
-    tags: Optional[List[str]]
-    category: Optional[str]
     depends_on_event_id: Optional[int]
     depends_on_quest_id: Optional[int]
     mood: Optional[EventMood]
     max_moves: Optional[int]
     moves_count: int
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True

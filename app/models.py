@@ -98,9 +98,12 @@ class SourceType(str, enum.Enum):
     QUEST = "quest"
     MANUAL = "manual"
 
-class EventType(str, enum.Enum):
-    FIXED = "fixed"
-    FLEXIBLE = "flexible"
+class SchedulingFlexibility(str, enum.Enum):
+    FIXED = "fixed"           # Cannot be moved at all (time and day locked)
+    STRICT = "strict"         # Cannot be moved to different days, but can move time within same day
+    FLEXIBLE = "flexible"     # Can be moved freely (both time and day)
+    WINDOW = "window"         # Can move within preferred time window, but not outside it
+    WINDOW_UNSTRICT = "window_unstrict"  # Can move within preferred time window on any day (same time window every day)
 
 class EventMood(str, enum.Enum):
     FUN = "fun"
@@ -161,6 +164,7 @@ class User(Base):
     stats = relationship("UserStats", back_populates="user", uselist=False)
     quest_preference = relationship("UserQuestPreference", back_populates="user", uselist=False)
     scheduled_tasks = relationship("ScheduledTask", back_populates="user")
+    events = relationship("Event", back_populates="user")
     google_token = relationship("GoogleOAuthToken", back_populates="user", uselist=False)
     
 
@@ -238,7 +242,7 @@ class Goal(Base):
     # Relationships
     owner = relationship("User", back_populates="goals")
     quests = relationship("Quest", secondary=goals_quests, back_populates="goals")
-    subgoals = relationship("GoalSubgoal", back_populates="goal", cascade="all, delete-orphan")
+    subgoals = relationship("Subgoal", back_populates="goal", cascade="all, delete-orphan")
 
 class Subgoal(Base):
     __tablename__ = "subgoals"
@@ -297,6 +301,19 @@ class Quest(Base):
     chunk_count: Mapped[int] = mapped_column(Integer, default=1)
     is_chunked: Mapped[bool] = mapped_column(Boolean, default=False)
     base_title: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # Original title for chunked quests
+    allow_chunking: Mapped[bool] = mapped_column(Boolean, default=True)  # Whether this task can be chunked
+    
+    # Parent-child relationship for chunked tasks
+    parent_quest_id: Mapped[Optional[int]] = mapped_column(ForeignKey("quests.id"), nullable=True)  # Link to parent quest
+    chunk_duration_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Duration of this specific chunk
+    
+    # Study-focused chunking fields
+    chunk_preference: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # 'fixed_size', 'deadline_aware', 'front_loaded', 'user_preference', 'adaptive'
+    chunk_size_preference: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # 'small', 'medium', 'large'
+    chunk_strategy: Mapped[Optional[dict]] = mapped_column(SQLiteJSON, nullable=True)  # Store chunking strategy details
+    
+    # Pomodoro technique field
+    pomodoro_enabled: Mapped[bool] = mapped_column(Boolean, default=False)  # Whether to apply pomodoro technique within scheduled blocks
     
     # Recurrence field - RRULE string (RFC 5545 standard)
     recurrence_rule: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # RRULE string for recurrence patterns
@@ -306,19 +323,28 @@ class Quest(Base):
     buffer_after: Mapped[int] = mapped_column(Integer, default=0)   # minutes
     
     # Scheduling flexibility
-    strict: Mapped[bool] = mapped_column(Boolean, default=False)  # If True, cannot be moved to different days
+    scheduling_flexibility: Mapped[SchedulingFlexibility] = mapped_column(Enum(SchedulingFlexibility), default=SchedulingFlexibility.FLEXIBLE)
     
     # Time window constraints (for AI scheduling)
     soft_start: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)  # Preferred start time (soft limit)
     soft_end: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)    # Preferred end time (soft limit)
     hard_start: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)  # Must start after this time (hard limit)
     hard_end: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)    # Must end before this time (hard limit)
+    
+    # Strict scheduling rule overrides
+    allow_time_deviation: Mapped[bool] = mapped_column(Boolean, default=False)      # Allow deviation from time preference
+    allow_urgent_override: Mapped[bool] = mapped_column(Boolean, default=False)     # Allow urgent deadline override
+    allow_same_day_recurring: Mapped[bool] = mapped_column(Boolean, default=False)  # Allow same-day recurring instances
 
     # Relationships
     owner = relationship("User", back_populates="quests")
-    quests_goals = relationship("Goal", secondary=goals_quests, back_populates="quests")
+    goals = relationship("Goal", secondary=goals_quests, back_populates="quests")
     subtasks = relationship("QuestSubtask", cascade="all, delete-orphan", back_populates="quest")
     template = relationship("MainDailyQuestTemplate", back_populates="quests")
+    
+    # Parent-child relationships for chunked tasks
+    parent_quest = relationship("Quest", remote_side=[id], back_populates="chunk_quests")
+    chunk_quests = relationship("Quest", back_populates="parent_quest", cascade="all, delete-orphan")
 
 class QuestSubtask(Base):
     __tablename__ = "quest_subtasks"
@@ -387,6 +413,7 @@ class ScheduledTask(Base):
     user = relationship("User", back_populates="scheduled_tasks")
 
 
+
 class Event(Base):
     __tablename__ = "events"
 
@@ -399,7 +426,7 @@ class Event(Base):
     start_time: Mapped[datetime] = mapped_column(nullable=False)
     end_time: Mapped[datetime] = mapped_column(nullable=False)
     
-    event_type: Mapped[EventType] = mapped_column(Enum(EventType), default=EventType.FIXED)
+    scheduling_flexibility: Mapped[SchedulingFlexibility] = mapped_column(Enum(SchedulingFlexibility), default=SchedulingFlexibility.FIXED)
     is_auto_generated: Mapped[bool] = mapped_column(default=False)
     source: Mapped[Optional[SourceType]] = mapped_column(Enum(SourceType))  # 'goal', 'subgoal', 'quest', 'manual'
     source_id: Mapped[Optional[int]] = mapped_column(Integer)  # e.g. the goal or quest ID

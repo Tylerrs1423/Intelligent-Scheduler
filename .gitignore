@@ -66,6 +66,8 @@ dump.rdb
 # Test files
 test_*.py
 *_test.py
+test_gpt_quest.py
+test_scheduler_simple.py
 
 # Environment files
 .env

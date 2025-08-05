@@ -1,7 +1,8 @@
 from typing import List
 from datetime import timedelta, datetime
 import random
-from .routes.events import CleanScheduler
+from .scheduling import CleanScheduler
+from .scheduling.scoring.priority_scoring import calculate_task_selection_priority, calculate_deadline_urgency_score, calculate_frequency_score
 from .models import Quest, SchedulingFlexibility
 from .services.recurrence import expand_recurring_quest
 
@@ -82,16 +83,16 @@ class HybridScheduler:
         print(f"\n📋 Other Tasks: {len(other_quests)}")
         
         # Sort other quests by task selection priority (priority + urgency + frequency)
-        sorted_other_quests = sorted(other_quests, key=lambda q: scheduler._calculate_task_selection_priority(q), reverse=True)
+        sorted_other_quests = sorted(other_quests, key=lambda q: calculate_task_selection_priority(q), reverse=True)
         
         # Schedule tasks in normal priority order
         print(f"\n📋 Scheduling tasks in priority order")
         
         print(f"\n📋 Other task selection order (by priority + urgency + frequency):")
         for i, quest in enumerate(sorted_other_quests):
-            priority_score = scheduler._calculate_task_selection_priority(quest)
-            urgency_score = scheduler._calculate_deadline_urgency_score(quest)
-            frequency_score = scheduler._calculate_frequency_score(quest)
+            priority_score = calculate_task_selection_priority(quest)
+            urgency_score = calculate_deadline_urgency_score(quest)
+            frequency_score = calculate_frequency_score(quest)
             print(f"   {i+1}. {quest.title} (Priority: {priority_score:.3f}, Urgency: {urgency_score:.3f}, Frequency: {frequency_score:.3f})")
         
         # STEP 1: Schedule FIXED events FIRST (they cannot be displaced)
@@ -157,9 +158,10 @@ class HybridScheduler:
         task_count = 0
         
         # Use the existing slot scoring for each scheduled task
+        from app.scheduling.scoring.slot_scoring import calculate_slot_score
         for slot in scheduler.slots:
             if hasattr(slot.occupant, 'id'):  # It's a Quest object
-                score = scheduler._calculate_slot_score(slot.occupant, slot)
+                score = calculate_slot_score(slot.occupant, slot, scheduler.slots)
                 total_score += score
                 task_count += 1
         

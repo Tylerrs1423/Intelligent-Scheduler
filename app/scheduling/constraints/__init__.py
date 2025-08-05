@@ -1,0 +1,3 @@
+"""
+Scheduling constraints and validation.
+""" 

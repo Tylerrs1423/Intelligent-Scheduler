@@ -6,7 +6,7 @@ RRULE is the primary engine for all recurrence patterns (RFC 5545 standard)
 from datetime import datetime, timedelta
 from typing import List, Optional
 from dateutil import rrule
-from app.models import Quest
+from app.models import Quest, SchedulingFlexibility
 
 
 def expand_recurring_quest(quest: Quest, start_date: datetime, end_date: datetime) -> List[Quest]:
@@ -23,9 +23,9 @@ def expand_recurring_quest(quest: Quest, start_date: datetime, end_date: datetim
     """
     # If no recurrence rule, return the quest as-is if it falls within the date range
     if not quest.recurrence_rule:
-        if quest.due_at and start_date <= quest.due_at <= end_date:
-            return [quest]
-        return []
+        # For non-recurring tasks, check if they fall within the date range
+        # This would be based on their deadline or other date fields
+        return [quest]
     
     try:
         # Parse RRULE string using dateutil
@@ -43,21 +43,22 @@ def expand_recurring_quest(quest: Quest, start_date: datetime, end_date: datetim
         
     except Exception as e:
         print(f"RRULE parsing failed: {e}")
-        # If RRULE parsing fails, return the original quest if it falls within range
-        if quest.due_at and start_date <= quest.due_at <= end_date:
-            return [quest]
+        # If RRULE parsing fails, return empty list
         return []
 
 
-def create_quest_instance(quest: Quest, due_at: datetime, instance_number: int) -> Quest:
+def create_quest_instance(quest: Quest, occurrence_date: datetime, instance_number: int) -> Quest:
     """
     Create a quest instance from a recurring quest
     
-    Note: The 'strict' field is preserved from the original quest.
-    - If strict=True: The quest instance cannot be moved to different days
-    - If strict=False: The quest instance can be moved to different days if needed for scheduling
+    Note: The scheduling_flexibility field is preserved from the original quest.
+    - FIXED: Cannot be moved at all
+    - STRICT: Cannot be moved to different days, but can move time within same day
+    - WINDOW: Must be within preferred time window
+    - FLEXIBLE: Can be moved anywhere
     """
     return Quest(
+        id=quest.id,  # Preserve the original quest ID
         title=quest.title,
         description=quest.description,
         xp_reward=quest.xp_reward,
@@ -68,7 +69,9 @@ def create_quest_instance(quest: Quest, due_at: datetime, instance_number: int) 
         
         # Scheduling fields
         priority=quest.priority,
-        due_at=due_at,
+        # For FIXED events, use occurrence_date as deadline (needed for scheduling)
+        # For other events, preserve original deadline (None for gym workouts)
+        deadline=occurrence_date if quest.scheduling_flexibility == SchedulingFlexibility.FIXED else quest.deadline,
         preferred_time_of_day=quest.preferred_time_of_day,
         duration_minutes=quest.duration_minutes,
         
@@ -78,17 +81,19 @@ def create_quest_instance(quest: Quest, due_at: datetime, instance_number: int) 
         is_chunked=quest.is_chunked,
         base_title=quest.base_title,
         
-        # Recurrence field (individual instances are not recurring)
-        recurrence_rule=None,
+        # Recurrence field (preserve for day constraint checking)
+        recurrence_rule=quest.recurrence_rule,
         
         # Buffer fields
         buffer_before=quest.buffer_before,
         buffer_after=quest.buffer_after,
         
         # Scheduling flexibility
-        strict=quest.strict,
+        scheduling_flexibility=quest.scheduling_flexibility,
         
         # Time window constraints
+        expected_start=quest.expected_start,
+        expected_end=quest.expected_end,
         soft_start=quest.soft_start,
         soft_end=quest.soft_end,
         hard_start=quest.hard_start,
@@ -97,7 +102,6 @@ def create_quest_instance(quest: Quest, due_at: datetime, instance_number: int) 
         # Status
         status=quest.status,
         sent_out_at=quest.sent_out_at,
-        deadline=quest.deadline,
         time_limit_minutes=quest.time_limit_minutes,
         repeatable=False,
         is_main_daily_quest=quest.is_main_daily_quest,
@@ -176,33 +180,33 @@ COMMON_RRULES = {
 
 def can_move_quest_to_day(quest: Quest, target_day: datetime) -> bool:
     """
-    Check if a quest can be moved to a different day based on its strict setting
+    Check if a quest can be moved to a different day based on its scheduling flexibility
     
     Args:
         quest: The quest to check
         target_day: The target day to move to
         
     Returns:
-        bool: True if the quest can be moved, False if it's strict and cannot be moved
+        bool: True if the quest can be moved, False if it cannot be moved
     """
-    if quest.strict:
-        # For strict quests, check if the target day matches the RRULE pattern
-        if not quest.recurrence_rule:
-            # No recurrence rule, can only be on the original due_at day
-            return quest.due_at and quest.due_at.date() == target_day.date()
-        
-        try:
-            from dateutil import rrule
-            # Parse the RRULE and check if target_day is a valid occurrence
-            rule = rrule.rrulestr(quest.recurrence_rule, dtstart=quest.due_at or target_day)
-            # Check if target_day is in the next few occurrences
-            next_occurrences = list(rule)[:10]  # Check next 10 occurrences
-            return any(occ.date() == target_day.date() for occ in next_occurrences)
-        except Exception:
-            # If RRULE parsing fails, be conservative and don't allow moving
-            return False
+    if not hasattr(quest, 'scheduling_flexibility'):
+        # Default to flexible if no scheduling flexibility specified
+        return True
+    
+    if quest.scheduling_flexibility == SchedulingFlexibility.FIXED:
+        # FIXED quests cannot be moved at all
+        return False
+    elif quest.scheduling_flexibility == SchedulingFlexibility.STRICT:
+        # STRICT quests cannot be moved to different days
+        return False
+    elif quest.scheduling_flexibility == SchedulingFlexibility.WINDOW:
+        # WINDOW quests can be moved to any day but must stay within time window
+        return True
+    elif quest.scheduling_flexibility == SchedulingFlexibility.FLEXIBLE:
+        # FLEXIBLE quests can be moved anywhere
+        return True
     else:
-        # Non-strict quests can be moved to any day
+        # Default to flexible
         return True
 
 

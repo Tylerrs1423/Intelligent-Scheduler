@@ -9,6 +9,7 @@ from ..schemas import EventOut
 from ..auth import get_current_user
 from copy import deepcopy
 from bisect import bisect_left, insort
+from itertools import combinations
 
 router = APIRouter(tags=["events"])
 logger = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 # Special constants for slot types
 BUFFER = "BUFFER"
 AVAILABLE = "AVAILABLE"
+RESERVED = "RESERVED"
 
 class CleanTimeSlot:
     """
@@ -155,9 +157,13 @@ class CleanScheduler:
                     break
             else:
                 return []  # No available slot that can fit the entire range
+            
+            # Create a candidate slot for exact time scheduling
+            optimal_candidate = CleanTimeSlot(buffer_before_start, buffer_after_end, AVAILABLE)
         else:
             # Find optimal slot based on priority and deadline
             total_duration = duration + timedelta(minutes=buffer_before + buffer_after)
+            print(f"      🔍 Looking for optimal slot for '{quest.title}' (duration: {total_duration})")
             optimal_candidate = self._find_optimal_slot(quest, total_duration)
             
             
@@ -165,21 +171,9 @@ class CleanScheduler:
                 # Try displacement for higher priority tasks
                 optimal_candidate = self._displace_lower_priority_tasks(quest, total_duration)
                 if optimal_candidate:
-                    print(f"         🔄 DISPLACED lower priority task to schedule {quest.title}")
-                    # Actually perform the displacement
-                    displaced_task = self._perform_displacement(quest, optimal_candidate, total_duration)
-                    if displaced_task:
-                        print(f"         📤 Displaced task: {displaced_task.title} (priority {displaced_task.priority})")
-                        # Return the displaced task along with the new slots for rescheduling
-                        # For now, we'll just schedule the high priority task and let the caller handle rescheduling
+                    print(f"         🔄 DISPLACED lower priority tasks to schedule {quest.title}")
                 else:
                     return []  # No available slot and no displacement possible
-            
-            # Use the optimal start time from the candidate slot
-            task_start = optimal_candidate.start + timedelta(minutes=buffer_before)
-            task_end = task_start + duration
-            buffer_before_start = optimal_candidate.start
-            buffer_after_end = task_end + timedelta(minutes=buffer_after)
             
             # Find the original available slot that contains this candidate
             available_slot = None
@@ -193,22 +187,16 @@ class CleanScheduler:
             if not available_slot:
                 return []  # Couldn't find the original slot
         
-        # Create a temporary slot for the task and let _schedule_in_slot handle it
-        temp_slot = CleanTimeSlot(
-            task_start,
-            task_end,
-            occupant=AVAILABLE
-        )
-        
         # Use _schedule_in_slot to handle pomodoro vs regular tasks
-        new_slots = self._schedule_in_slot(quest, duration, temp_slot, buffer_before, buffer_after)
+        # Pass the optimal candidate slot directly
+        new_slots = self._schedule_in_slot(quest, duration, optimal_candidate, buffer_before, buffer_after)
         
         # Update the scheduler by replacing the original available slot
         self._replace_slot(available_slot, new_slots)
         
         return new_slots
 
-    def _generate_candidate_slots(self, available_slot: CleanTimeSlot, quest: Quest, total_duration: timedelta, interval_minutes: int = 15) -> List[CleanTimeSlot]:
+    def _generate_candidate_slots(self, available_slot: CleanTimeSlot, quest: Quest, total_duration: timedelta, interval_minutes: int = 5) -> List[CleanTimeSlot]:
         """
         Generate candidate slots at fixed intervals within a large available time block.
         This allows testing different start times within the same available period.
@@ -243,21 +231,18 @@ class CleanScheduler:
         """
         available_slots = []
         
-        # Find all available slots that can fit the task
+        # Find all available slots that can fit the task (duration check only)
         for slot in self.slots:
             if (slot.occupant == AVAILABLE and 
+                slot.occupant != RESERVED and
                 slot.duration() >= total_duration):
-                
-                # Check if this slot violates any strict rules
-                if self._is_slot_allowed(quest, slot):
-                    available_slots.append(slot)
+                available_slots.append(slot)
+            elif slot.occupant not in (AVAILABLE, RESERVED):
+                occupant_name = getattr(slot.occupant, 'title', str(slot.occupant))
+                print(f"      ⛔ Slot {slot.start.strftime('%Y-%m-%d %H:%M')} - {slot.end.strftime('%H:%M')} is occupied by '{occupant_name}' (priority: {getattr(slot.occupant, 'priority', '?')})")
         
         if not available_slots:
             return None
-        
-        # If only one slot available, use it
-        if len(available_slots) == 1:
-            return available_slots[0]
         
         # Generate candidate slots for each available slot
         all_candidates = []
@@ -268,27 +253,126 @@ class CleanScheduler:
         if not all_candidates:
             return None
         
-        # Score each candidate slot using the weighted formula
-        scored_candidates = []
+        # Check each candidate slot with strict rules
+        allowed_candidates = []
         for candidate in all_candidates:
+            if self._is_slot_allowed(quest, candidate):
+                allowed_candidates.append(candidate)
+        
+        if not allowed_candidates:
+            return None
+        
+        # Score each allowed candidate slot using the weighted formula
+        scored_candidates = []
+        for candidate in allowed_candidates:
             score = self._calculate_slot_score(quest, candidate)
             scored_candidates.append((score, candidate))
+            if "Gym Workout" in quest.title:
+                print(f"      🏅 Candidate slot: {candidate.start.strftime('%H:%M')} - {candidate.end.strftime('%H:%M')}, score={score}")
         
         # Sort by score (highest first) and return the best candidate
         scored_candidates.sort(key=lambda x: x[0], reverse=True)
+        if scored_candidates and "Gym Workout" in quest.title:
+            best = scored_candidates[0][1]
+            print(f"      🥇 PICKED slot: {best.start.strftime('%H:%M')} - {best.end.strftime('%H:%M')}, score={scored_candidates[0][0]}")
         return scored_candidates[0][1]
 
     def _is_slot_allowed(self, quest: Quest, slot: CleanTimeSlot) -> bool:
         """
         Check if a slot is allowed for this quest based on strict rules.
         """
-        # Rule 1: Check time preference (hard limit)
-        time_preference_score = self._calculate_time_preference_score(quest, slot)
-        if time_preference_score < 0:  # Negative score means disqualified
-            return False
+        # Rule 1: Check absolute deadline (hard constraint)
+        if quest.deadline:
+            # Calculate when the task would finish
+            task_duration = timedelta(minutes=quest.duration_minutes or 60)
+            task_end_time = slot.start + task_duration
+            
+            # If the task finishes after the absolute deadline, it's not allowed
+            if task_end_time > quest.deadline:
+                print(f"      ❌ Slot rejected: absolute deadline constraint (finishes at {task_end_time}, deadline {quest.deadline})")
+                return False
         
-        # Rule 2: Check for same-day recurring tasks (unless allowed)
+        # Rule 2: Check scheduling flexibility constraints
+        if hasattr(quest, 'scheduling_flexibility'):
+            if quest.scheduling_flexibility == SchedulingFlexibility.FIXED:
+                # FIXED tasks must be scheduled at their exact hard_start time
+                if hasattr(quest, 'hard_start') and quest.hard_start:
+                    # Check if slot starts at the exact hard_start time
+                    slot_start_time = slot.start.time()
+                    if slot_start_time != quest.hard_start or slot_end_time != quest.hard_end:
+                        print(f"      ❌ Slot rejected: FIXED scheduling constraint (slot starts at {slot_start_time}, hard_start {quest.hard_start})")
+                        return False
+                else:
+                    print(f"      ❌ Slot rejected: FIXED scheduling constraint but no hard_start specified")
+                    return False
+            
+            elif quest.scheduling_flexibility == SchedulingFlexibility.WINDOW:
+                # WINDOW tasks must be within their preferred time window AND on the correct day
+                
+                # First, check hard time constraints (hard_start and hard_end)
+                slot_start_time = slot.start.time()
+                slot_end_time = slot.end.time()
+                
+                print(f"      🔍 WINDOW constraint check for '{quest.title}': slot {slot_start_time}-{slot_end_time}, hard {quest.hard_start}-{quest.hard_end}")
+                
+                if quest.hard_start and slot_start_time < quest.hard_start:
+                    print(f"      ❌ Slot rejected: WINDOW hard start constraint (slot starts at {slot_start_time}, hard_start {quest.hard_start})")
+                    return False
+                
+                if quest.hard_end and slot_end_time > quest.hard_end:
+                    print(f"      ❌ Slot rejected: WINDOW hard end constraint (slot ends at {slot_end_time}, hard_end {quest.hard_end})")
+                    return False
+                
+                # Check time preference score
+                time_preference_score = self._calculate_time_preference_score(quest, slot)
+                if time_preference_score < 0.1:  # Must be at least within hard window (0.1 score)
+                    print(f"      ❌ Slot rejected: WINDOW scheduling constraint (time preference score {time_preference_score} < 0.1)")
+                    return False
+                
+                # STRICT DAY CONSTRAINT: WINDOW tasks must be on their designated recurrence days
+                if quest.recurrence_rule:
+                    # Parse the recurrence rule to get the allowed days
+                    try:
+                        from dateutil import rrule
+                        rule = rrule.rrulestr(quest.recurrence_rule, dtstart=slot.start)
+                        
+                        # Get the day of week for the slot
+                        slot_day = slot.start.weekday()  # Monday=0, Tuesday=1, etc.
+                        
+                        # Convert to RRULE day format (MO=0, TU=1, etc.)
+                        day_names = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']
+                        slot_day_name = day_names[slot_day]
+                        
+                        # Check if this day is allowed in the recurrence rule
+                        if 'BYDAY=' in quest.recurrence_rule:
+                            allowed_days = quest.recurrence_rule.split('BYDAY=')[1].split(';')[0].split(',')
+                            print(f"      🔍 WINDOW day constraint check for '{quest.title}' (ID: {getattr(quest, 'id', 'None')}): slot day {slot_day_name}, recurrence rule '{quest.recurrence_rule}', allowed days {allowed_days}")
+                            if slot_day_name not in allowed_days:
+                                print(f"      ❌ Slot rejected: WINDOW day constraint (slot day {slot_day_name}, allowed days {allowed_days})")
+                                return False
+                        else:
+                            print(f"      ❌ Slot rejected: WINDOW day constraint (no BYDAY in recurrence rule)")
+                            return False
+                            
+                    except Exception as e:
+                        print(f"      ❌ Slot rejected: WINDOW day constraint (error parsing recurrence: {e})")
+                        return False
+            
+            elif quest.scheduling_flexibility == SchedulingFlexibility.STRICT:
+                # STRICT tasks must stay on the same day as their designated date
+                # This is handled by the recurrence service expanding them correctly
+                pass
+        
+        # Rule 3: Check time preference for non-constrained tasks (hard limit)
+        if not hasattr(quest, 'scheduling_flexibility') or quest.scheduling_flexibility == SchedulingFlexibility.FLEXIBLE:
+            time_preference_score = self._calculate_time_preference_score(quest, slot)
+            if time_preference_score < 0:  # Negative score means disqualified
+                print(f"      ❌ Slot rejected: time preference score {time_preference_score} < 0")
+                return False
+        
+        # Rule 4: Check for same-day recurring tasks (unless allowed)
         if not self._is_same_day_recurring_allowed(quest, slot):
+            print(f"      ❌ Slot rejected: same-day recurring constraint")
             return False
         
         return True
@@ -515,13 +599,13 @@ class CleanScheduler:
             return -1000.0  # Very strong penalty - effectively disqualifies the slot
         
         # Component 1: Time preference match (W_time = 1.2)
-        time_match = self._calculate_time_match_score(quest, slot)
+        time_match = self._calculate_time_preference_score(quest, slot)
         
-        # Component 2: Urgency/deadline (W_urgency = 1.0)
-        urgency = self._calculate_urgency_score(quest, slot)
+        # Component 2: Urgency/deadline (W_urgency = 0.0) - Urgency handled in task selection order
+        urgency = 0.0  # Urgency is now handled in task selection phase, not slot scoring
         
-        # Component 3: Priority (W_priority = 1.5)
-        priority = self._calculate_priority_score(quest)
+        # Component 3: Priority (W_priority = 0.0) - Priority handled separately in task ordering
+        priority = 0.0  # Priority is now handled in task selection phase, not slot scoring
         
         # Component 4: Daily workload balance (W_workload = 1.0)
         daily_workload = self._calculate_daily_workload_bonus(quest, slot)
@@ -535,82 +619,93 @@ class CleanScheduler:
         # Component 7: Difficulty-based workload balancing (W_difficulty = 1.3)
         difficulty_balance = self._calculate_difficulty_workload_balance(quest, slot)
         
+        # Component 8: Earlier scheduling bonus (W_earlier = 0.8)
+        earlier_bonus = self._calculate_earlier_bonus(quest, slot)
+        
         # Apply weights and calculate total score
         total_score = (
-            (1.2 * time_match) +
-            (1.0 * urgency) +
-            (1.5 * priority) +
+            (1000.0 * time_match) +  # Increased to 1000.0 - absolutely dominant
+            (0.0 * urgency) +  # Urgency handled in task selection order
+            (0.0 * priority) +  # Priority handled separately
             (1.0 * daily_workload) +
             (1.0 * weekly_balance) +
             (0.7 * spacing_bonus) +
-            (1.3 * difficulty_balance)
+            (1.3 * difficulty_balance) +
+            (0.8 * earlier_bonus)  # Bonus for scheduling earlier within 2 weeks of deadline
         )
+        
+        # Debug output for gym workouts
+        if "Gym Workout" in quest.title:
+            print(f"      🏋️ SLOT SCORE DEBUG: '{quest.title}' slot {slot.start.time()}-{slot.end.time()}")
+            print(f"         📊 time_match={time_match} (weighted={1000.0 * time_match})")
+            print(f"         📊 daily_workload={daily_workload}, weekly_balance={weekly_balance}")
+            print(f"         📊 spacing_bonus={spacing_bonus}, difficulty_balance={difficulty_balance}")
+            print(f"         📊 earlier_bonus={earlier_bonus}")
+            print(f"         📊 TOTAL SCORE={total_score}")
         
         return total_score
 
-    def _calculate_time_match_score(self, quest: Quest, slot: CleanTimeSlot) -> float:
-        """
-        Calculate time preference match: 1.0 if within preferred hours, else 0.0
-        """
-        if not quest.preferred_time_of_day or quest.preferred_time_of_day == PreferredTimeOfDay.NO_PREFERENCE:
-            return 0.5  # Neutral score for no preference
-        
-        slot_start_hour = slot.start.hour
-        
-        if quest.preferred_time_of_day == PreferredTimeOfDay.MORNING:
-            # 6 AM - 12 PM
-            return 1.0 if 6 <= slot_start_hour < 12 else 0.0
-        elif quest.preferred_time_of_day == PreferredTimeOfDay.AFTERNOON:
-            # 12 PM - 6 PM
-            return 1.0 if 12 <= slot_start_hour < 18 else 0.0
-        elif quest.preferred_time_of_day == PreferredTimeOfDay.EVENING:
-            # 6 PM - 11 PM
-            return 1.0 if 18 <= slot_start_hour < 23 else 0.0
-        
-        return 0.0
+
 
     def _calculate_urgency_score(self, quest: Quest, slot: CleanTimeSlot) -> float:
         """
-        Calculate urgency using percentage-based approach with hour precision.
-        Returns percentage of urgency based on how close the slot is to the deadline in hours.
-        Includes penalty for scheduling too close to deadline.
+        Calculate pure deadline-based urgency score.
+        Uses deadline for hard constraints, due_at for soft urgency.
+        Returns exponentially higher scores for earlier slots to prioritize urgent tasks.
         """
-        if not quest.deadline:
+        # Use deadline for urgency scoring (hard constraint)
+        deadline_datetime = quest.deadline
+        if not deadline_datetime:
             return 0.0
         
         slot_datetime = slot.start
-        deadline_datetime = quest.deadline
         
         # Calculate hours until deadline from the slot datetime
         hours_until_deadline = (deadline_datetime - slot_datetime).total_seconds() / 3600
         
-        # If deadline has passed, return negative score to prevent scheduling
+        # If deadline has passed, return negative score to discourage scheduling
         if hours_until_deadline < 0:
-            return -1000.0  # Hard constraint: no scheduling past deadline
+            return -1.0  # Strong penalty: discourage scheduling past deadline
         
-        # Calculate total available hours from now to deadline
-        now = datetime.now()
-        total_available_hours = (deadline_datetime - now).total_seconds() / 3600
+        # Pure deadline-based urgency scoring (no priority influence)
+        if hours_until_deadline <= 24:  # 1 day or less
+            # Very urgent: exponential decay based on hours
+            urgency_score = 1.0 - (hours_until_deadline / 24.0) ** 2  # Quadratic decay
+            urgency_score = max(0.8, urgency_score)  # Higher minimum for very urgent tasks
+        elif hours_until_deadline <= 48:  # 2 days or less
+            # Urgent: linear decay
+            urgency_score = 0.9 - (hours_until_deadline - 24.0) / 24.0 * 0.4
+            urgency_score = max(0.5, urgency_score)
+        elif hours_until_deadline <= 72:  # 3 days or less
+            # Moderately urgent: gentle decay
+            urgency_score = 0.7 - (hours_until_deadline - 48.0) / 24.0 * 0.3
+            urgency_score = max(0.3, urgency_score)
+        elif hours_until_deadline <= 168:  # 1 week or less
+            # Somewhat urgent: very gentle decay
+            urgency_score = 0.5 - (hours_until_deadline - 72.0) / 96.0 * 0.2
+            urgency_score = max(0.2, urgency_score)
+        else:
+            # Not urgent: minimal preference
+            urgency_score = 0.2 - (hours_until_deadline - 168.0) / 168.0 * 0.1
+            urgency_score = max(0.1, urgency_score)
         
-        # Avoid division by zero
-        if total_available_hours <= 0:
-            return 1.0
+        # Apply deadline multiplier for exponential urgency boost
+        # The closer to deadline, the more the urgency score is amplified
+        if hours_until_deadline <= 24:  # 1 day or less
+            deadline_multiplier = 25.0  # 25x boost for very urgent tasks
+        elif hours_until_deadline <= 48:  # 2 days or less
+            deadline_multiplier = 15.0  # 15x boost for urgent tasks
+        elif hours_until_deadline <= 72:  # 3 days or less
+            deadline_multiplier = 8.0   # 8x boost for moderately urgent tasks
+        elif hours_until_deadline <= 168:  # 1 week or less
+            deadline_multiplier = 3.0   # 3x boost for somewhat urgent tasks
+        else:
+            deadline_multiplier = 1.0   # No boost for non-urgent tasks
         
-        # Calculate base urgency percentage
-        urgency_percentage = 1.0 - (hours_until_deadline / total_available_hours)
+        # Apply the deadline multiplier
+        final_urgency_score = urgency_score * deadline_multiplier
         
-        # Apply penalty for scheduling too close to deadline
-        # Less than 8 hours before deadline = penalty
-        # Less than 4 hours before deadline = heavy penalty
-        if hours_until_deadline < 4:
-            # Heavy penalty: reduce score by 50%
-            urgency_percentage *= 0.5
-        elif hours_until_deadline < 8:
-            # Moderate penalty: reduce score by 20%
-            urgency_percentage *= 0.8
-        
-        # Ensure score is between 0 and 1
-        return max(0.0, min(1.0, urgency_percentage))
+        return final_urgency_score
 
     def _calculate_difficulty_workload_balance(self, quest: Quest, slot: CleanTimeSlot) -> float:
         """
@@ -748,7 +843,7 @@ class CleanScheduler:
 
     def _calculate_priority_score(self, quest: Quest) -> float:
         """
-        Map priority to score: Low: 0.3, Medium: 0.6, High: 1.0
+        Map priority to score: Low: 0.3, Medium: 0.6, High: 1.0, Very High: 1.5+
         """
         if quest.priority == 1:
             return 0.3  # Low priority
@@ -758,8 +853,122 @@ class CleanScheduler:
             return 0.8  # Medium-high priority
         elif quest.priority == 4:
             return 1.0  # High priority
+        elif quest.priority == 5:
+            return 1.2  # Very high priority
+        elif quest.priority == 6:
+            return 1.5  # Extremely high priority
         else:
             return 0.5  # Default
+
+    def _calculate_task_selection_priority(self, quest: Quest) -> float:
+        """
+        Calculate task selection priority combining priority, urgency, and frequency.
+        Higher score = higher priority for task selection order.
+        """
+        # Base priority score (0.3 - 1.0)
+        priority_score = self._calculate_priority_score(quest)
+        
+        # Urgency score based on deadline proximity
+        urgency_score = self._calculate_deadline_urgency_score(quest)
+        
+        # Frequency bonus for recurring tasks
+        frequency_score = self._calculate_frequency_score(quest)
+        
+        # Combine scores with weights
+        # Priority is most important (50%), then urgency (40%), then frequency (10%)
+        total_score = (
+            (0.5 * priority_score) +
+            (0.4 * urgency_score) +
+            (0.1 * frequency_score)
+        )
+        
+        return total_score
+
+    def _calculate_deadline_urgency_score(self, quest: Quest) -> float:
+        """
+        Calculate urgency score based on deadline proximity (0.0 - 1.0).
+        Higher score = closer to deadline = more urgent.
+        """
+        deadline_datetime = quest.deadline
+        if not deadline_datetime:
+            return 0.0  # No urgency if no deadline
+        
+        now = datetime.now()
+        hours_until_deadline = (deadline_datetime - now).total_seconds() / 3600
+        
+        # If deadline has passed, very high urgency
+        if hours_until_deadline < 0:
+            return 1.0
+        
+        # Calculate urgency based on hours until deadline
+        if hours_until_deadline <= 24:  # 1 day or less
+            # Very urgent: exponential decay
+            urgency_score = 1.0 - (hours_until_deadline / 24.0) ** 2
+            return max(0.8, urgency_score)
+        elif hours_until_deadline <= 48:  # 2 days or less
+            # Urgent: linear decay
+            urgency_score = 0.8 - (hours_until_deadline - 24.0) / 24.0 * 0.3
+            return max(0.5, urgency_score)
+        elif hours_until_deadline <= 72:  # 3 days or less
+            # Moderately urgent
+            urgency_score = 0.5 - (hours_until_deadline - 48.0) / 24.0 * 0.2
+            return max(0.3, urgency_score)
+        elif hours_until_deadline <= 168:  # 1 week or less
+            # Somewhat urgent
+            urgency_score = 0.3 - (hours_until_deadline - 72.0) / 96.0 * 0.1
+            return max(0.2, urgency_score)
+        else:
+            # Not urgent
+            urgency_score = 0.2 - (hours_until_deadline - 168.0) / 168.0 * 0.1
+            return max(0.1, urgency_score)
+
+    def _calculate_frequency_score(self, quest: Quest) -> float:
+        """
+        Calculate frequency score for recurring tasks (0.0 - 1.0).
+        Higher score = more frequent = higher priority.
+        """
+        if not quest.recurrence_rule:
+            return 0.0  # Not recurring
+        
+        # Parse recurrence rule to determine frequency
+        if "FREQ=DAILY" in quest.recurrence_rule:
+            return 1.0  # Daily tasks get highest frequency score
+        elif "FREQ=WEEKLY" in quest.recurrence_rule:
+            return 0.8  # Weekly tasks get high frequency score
+        elif "FREQ=MONTHLY" in quest.recurrence_rule:
+            return 0.6  # Monthly tasks get medium frequency score
+        elif "FREQ=YEARLY" in quest.recurrence_rule:
+            return 0.4  # Yearly tasks get low frequency score
+        else:
+            return 0.5  # Unknown frequency, default medium
+
+    def _calculate_earlier_bonus(self, quest: Quest, slot: CleanTimeSlot) -> float:
+        """
+        Calculate bonus for scheduling tasks earlier than their deadline.
+        Only applies when within 2 weeks of deadline to encourage earlier scheduling.
+        Returns 0.0 if more than 2 weeks from deadline.
+        """
+        deadline_datetime = quest.deadline
+        if not deadline_datetime:
+            return 0.0
+        
+        # Calculate days until deadline from the slot start time
+        days_until_deadline = (deadline_datetime - slot.start).days
+        
+        # Only apply bonus if within 2 weeks (14 days) of deadline
+        if days_until_deadline > 14:
+            return 0.0
+        
+        # Calculate bonus: more days before deadline = higher bonus
+        # Max bonus (1.0) when 14 days before deadline
+        # Min bonus (0.0) when at deadline
+        if days_until_deadline >= 0:
+            # Linear bonus from 0.0 to 1.0 over 14 days
+            bonus = days_until_deadline / 14.0
+            return bonus
+        else:
+            # Negative days means past deadline - no bonus
+            return 0.0
 
     def _calculate_workload_density_score(self, quest: Quest, slot: CleanTimeSlot) -> float:
         """
@@ -852,96 +1061,111 @@ class CleanScheduler:
 
     def _calculate_time_preference_score(self, quest: Quest, slot: CleanTimeSlot) -> float:
         """
-        Calculate score for preferred time of day with different flexibility levels:
-        - FIXED: Must be at exact time
-        - STRICT: Must be within preferred time window, no deviation
-        - WINDOW: Must be within preferred time window, no deviation (same as STRICT for time)
-        - FLEXIBLE: Can deviate from preferred time with penalties
+        Calculate score for time preferences with 3-tier scoring system:
+        1. Expected window (highest score): exact expected_start to expected_end
+        2. Soft window (medium score): soft_start to soft_end  
+        3. Hard window (low score): hard_start to hard_end
+        4. Outside hard window: reject (0.0)
+        
+        Also considers preferred_time_of_day as a separate scoring component.
         """
-        if not quest.preferred_time_of_day or quest.preferred_time_of_day == PreferredTimeOfDay.NO_PREFERENCE:
-            return 0.5  # Neutral score for no preference
+        slot_start_time = slot.start.time()
+        slot_end_time = slot.end.time()
         
-        slot_start_hour = slot.start.hour
-        slot_end_hour = slot.end.hour
+        # Convert times to minutes for easier comparison
+        slot_start_minutes = slot_start_time.hour * 60 + slot_start_time.minute
+        slot_end_minutes = slot_end_time.hour * 60 + slot_end_time.minute
         
-        # Check if this is a daily recurring task
-        is_daily = quest.recurrence_rule and "FREQ=DAILY" in quest.recurrence_rule
+        # Handle FIXED flexibility with hard_start and hard_end constraints
+        if quest.scheduling_flexibility == SchedulingFlexibility.FIXED:
+            if quest.hard_start and quest.hard_end:
+                # Check if slot exactly matches the hard_start and hard_end times
+                if slot_start_time == quest.hard_start and slot_end_time == quest.hard_end:
+                    return 1.0  # Perfect score for exact match
+                else:
+                    return 0.0  # Reject if not exact match
         
-        # Check if we should allow deviation from preferred time
-        allow_deviation = self._should_allow_time_deviation(quest)
+        # 3-tier time window scoring system
+        time_window_score = 0.0
         
-        # For WINDOW flexibility, allow day flexibility but be strict about time
-        # (WINDOW can move to different days but must stay within preferred time window)
-        is_window_flexible = hasattr(quest, 'scheduling_flexibility') and quest.scheduling_flexibility == SchedulingFlexibility.WINDOW
+        # Check if we have any time window constraints
+        has_time_constraints = (quest.expected_start or quest.expected_end or 
+                              quest.soft_start or quest.soft_end or 
+                              quest.hard_start or quest.hard_end)
         
-        # For WINDOW_UNSTRICT flexibility, allow same time window on any day
-        # (WINDOW_UNSTRICT can move to different days but must stay within preferred time window)
-        is_window_unstrict_flexible = hasattr(quest, 'scheduling_flexibility') and quest.scheduling_flexibility == SchedulingFlexibility.WINDOW_UNSTRICT
-        
-        if quest.preferred_time_of_day == PreferredTimeOfDay.MORNING:
-            # 6 AM - 12 PM
-            # Calculate percentage of task that falls within morning window
-            morning_start = 6
-            morning_end = 12
+        if has_time_constraints:
+            # Convert constraint times to minutes
+            expected_start_minutes = (quest.expected_start.hour * 60 + quest.expected_start.minute) if quest.expected_start else None
+            expected_end_minutes = (quest.expected_end.hour * 60 + quest.expected_end.minute) if quest.expected_end else None
+            soft_start_minutes = (quest.soft_start.hour * 60 + quest.soft_start.minute) if quest.soft_start else None
+            soft_end_minutes = (quest.soft_end.hour * 60 + quest.soft_end.minute) if quest.soft_end else None
+            hard_start_minutes = (quest.hard_start.hour * 60 + quest.hard_start.minute) if quest.hard_start else None
+            hard_end_minutes = (quest.hard_end.hour * 60 + quest.hard_end.minute) if quest.hard_end else None
             
-            # Calculate overlap with morning window
-            overlap_start = max(slot_start_hour, morning_start)
-            overlap_end = min(slot_end_hour, morning_end)
-            overlap_hours = max(0, overlap_end - overlap_start)
+            # Check if slot is within hard window (must pass this)
+            if hard_start_minutes is not None and slot_start_minutes < hard_start_minutes:
+                return 0.0  # Reject - starts too early
+            if hard_end_minutes is not None and slot_end_minutes > hard_end_minutes:
+                return 0.0  # Reject - ends too late
             
-            # Calculate total task duration
-            total_hours = slot_end_hour - slot_start_hour
-            
-            if total_hours > 0:
-                percentage_in_morning = overlap_hours / total_hours
-                # Return the actual percentage as the score - more rewarding!
-                return percentage_in_morning
+            # 3-tier scoring - check BOTH start and end times
+            if (expected_start_minutes is not None and expected_end_minutes is not None and
+                slot_start_minutes >= expected_start_minutes and slot_end_minutes <= expected_end_minutes):
+                time_window_score = 100.0  # ⭐⭐⭐ Perfect - within expected window (increased from 10.0 to 100.0)
+            elif (soft_start_minutes is not None and soft_end_minutes is not None and
+                  slot_start_minutes >= soft_start_minutes and slot_end_minutes <= soft_end_minutes):
+                time_window_score = 0.5  # ⭐⭐ Good - within soft window (reduced from 0.7)
+            elif (hard_start_minutes is not None and hard_end_minutes is not None and
+                  slot_start_minutes >= hard_start_minutes and slot_end_minutes <= hard_end_minutes):
+                time_window_score = 0.1  # ⭐ Acceptable - within hard window (reduced from 0.3)
             else:
-                return 0.0  # Zero duration task
-                
-        elif quest.preferred_time_of_day == PreferredTimeOfDay.AFTERNOON:
-            # 12 PM - 6 PM
-            # Calculate percentage of task that falls within afternoon window
-            afternoon_start = 12
-            afternoon_end = 18
-            
-            # Calculate overlap with afternoon window
-            overlap_start = max(slot_start_hour, afternoon_start)
-            overlap_end = min(slot_end_hour, afternoon_end)
-            overlap_hours = max(0, overlap_end - overlap_start)
-            
-            # Calculate total task duration
-            total_hours = slot_end_hour - slot_start_hour
-            
-            if total_hours > 0:
-                percentage_in_afternoon = overlap_hours / total_hours
-                # Return the actual percentage as the score - more rewarding!
-                return percentage_in_afternoon
-            else:
-                return 0.0  # Zero duration task
-                
-        elif quest.preferred_time_of_day == PreferredTimeOfDay.EVENING:
-            # 6 PM - 11 PM (18:00 - 23:00)
-            # Calculate percentage of task that falls within evening window
-            evening_start = 18
-            evening_end = 23
-            
-            # Calculate overlap with evening window
-            overlap_start = max(slot_start_hour, evening_start)
-            overlap_end = min(slot_end_hour, evening_end)
-            overlap_hours = max(0, overlap_end - overlap_start)
-            
-            # Calculate total task duration
-            total_hours = slot_end_hour - slot_start_hour
-            
-            if total_hours > 0:
-                percentage_in_evening = overlap_hours / total_hours
-                # Return the actual percentage as the score - more rewarding!
-                return percentage_in_evening
-            else:
-                return 0.0  # Zero duration task
+                time_window_score = 0.0  # ❌ Reject - outside all windows
         
-        return -1.0  # Unknown preference - disqualify
+        # Handle WINDOW flexibility - must have time window constraints
+        if quest.scheduling_flexibility == SchedulingFlexibility.WINDOW:
+            if not has_time_constraints:
+                return 0.0  # WINDOW tasks must have time constraints
+            print(f"      🎯 TIME PREFERENCE: '{quest.title}' slot {slot.start.time()}-{slot.end.time()} = {time_window_score}")
+            print(f"         📊 DEBUG: expected={expected_start_minutes}-{expected_end_minutes}, soft={soft_start_minutes}-{soft_end_minutes}, hard={hard_start_minutes}-{hard_end_minutes}")
+            print(f"         📊 DEBUG: slot_start={slot_start_minutes}, slot_end={slot_end_minutes}")
+            return time_window_score  # Use the 3-tier score directly
+        
+        # For other flexibility types, combine time window score with time of day preference
+        time_of_day_score = 0.5  # Default neutral score
+        
+        if quest.preferred_time_of_day and quest.preferred_time_of_day != PreferredTimeOfDay.NO_PREFERENCE:
+            slot_start_hour = slot.start.hour
+            
+            # Check if we should allow deviation from preferred time
+            allow_deviation = quest.allow_time_deviation or quest.scheduling_flexibility == SchedulingFlexibility.FLEXIBLE
+            
+            if quest.preferred_time_of_day == PreferredTimeOfDay.MORNING:
+                if 6 <= slot_start_hour < 12:
+                    time_of_day_score = 1.0
+                elif allow_deviation and (5 <= slot_start_hour < 14):
+                    time_of_day_score = 0.7
+                else:
+                    time_of_day_score = 0.3
+            elif quest.preferred_time_of_day == PreferredTimeOfDay.AFTERNOON:
+                if 12 <= slot_start_hour < 18:
+                    time_of_day_score = 1.0
+                elif allow_deviation and (10 <= slot_start_hour < 20):
+                    time_of_day_score = 0.7
+                else:
+                    time_of_day_score = 0.3
+            elif quest.preferred_time_of_day == PreferredTimeOfDay.EVENING:
+                if 18 <= slot_start_hour < 23:
+                    time_of_day_score = 1.0
+                elif allow_deviation and (16 <= slot_start_hour < 24):
+                    time_of_day_score = 0.7
+                else:
+                    time_of_day_score = 0.3
+        
+        # Combine scores: if we have time window constraints, prioritize them
+        if has_time_constraints:
+            return time_window_score
+        else:
+            return time_of_day_score
 
     def _should_allow_time_deviation(self, quest: Quest) -> bool:
         """
@@ -1067,7 +1291,9 @@ class CleanScheduler:
             next_slot = self.slots[i + 1]
             
             if (current.occupant == AVAILABLE and 
-                next_slot.occupant == AVAILABLE):
+                next_slot.occupant == AVAILABLE and
+                current.end == next_slot.start and
+                current.end.date() == next_slot.start.date()):  # Only merge if they're actually adjacent in time AND on the same day
                 
                 # Merge the slots
                 merged_slot = CleanTimeSlot(
@@ -1155,56 +1381,274 @@ class CleanScheduler:
 
     def _displace_lower_priority_tasks(self, quest: Quest, required_duration: timedelta) -> Optional[CleanTimeSlot]:
         """
-        Try to displace lower priority tasks to make room for a higher priority task.
-        Returns the best slot found after displacement, or None if no displacement possible.
+        Comprehensive displacement system that evaluates single and multi-event displacements using scoring.
+        Returns the optimal slot after displacement, or None if no effective displacement possible.
         """
         if not quest.priority:
-            return None  # Can't displace without priority info
+            return None
         
         quest_priority = quest.priority
         
-        # Find all tasks with lower priority that could be displaced
+        # Find all displaceable tasks
         displaceable_tasks = []
         for slot in self.slots:
             if (slot.occupant and 
                 hasattr(slot.occupant, 'priority') and 
                 slot.occupant.priority and 
                 slot.occupant.priority < quest_priority):
+                
+                # Skip tasks after deadline
+                if quest.deadline and slot.start > quest.deadline:
+                    continue
+                
+                # Skip FIXED tasks
+                if (hasattr(slot.occupant, 'scheduling_flexibility') and 
+                    slot.occupant.scheduling_flexibility == SchedulingFlexibility.FIXED):
+                    continue
+                
                 displaceable_tasks.append(slot)
         
         if not displaceable_tasks:
-            return None  # No lower priority tasks to displace
+            return None
         
-        # Sort by priority (lowest first) and then by duration (shortest first)
+        # Sort by priority (lowest first) and duration (shortest first)
         displaceable_tasks.sort(key=lambda s: (s.occupant.priority, (s.end - s.start)))
         
-        best_displacement_slot = None
+        # Evaluate all possible displacement combinations
+        best_displacement = None
         best_score = float('-inf')
         
-        # Try displacing each lower priority task
-        for slot_to_displace in displaceable_tasks:
-            displaced_task = slot_to_displace.occupant
-            original_start = slot_to_displace.start
-            original_end = slot_to_displace.end
-            
-            # Temporarily remove the displaced task
-            slot_to_displace.occupant = AVAILABLE
-            
-            # Try to find a slot for our high priority task
-            optimal_slot = self._find_optimal_slot(quest, required_duration)
-            if optimal_slot:
-                # Score this displacement option
-                displacement_score = self._calculate_displacement_score(
-                    quest, optimal_slot, displaced_task, slot_to_displace
-                )
-                if displacement_score > best_score:
-                    best_score = displacement_score
-                    best_displacement_slot = optimal_slot
-            
-            # Restore the displaced task
-            slot_to_displace.occupant = displaced_task
+        print(f"      🔍 Evaluating displacement for '{quest.title}' (priority {quest.priority})")
+        print(f"      📊 Found {len(displaceable_tasks)} displaceable tasks")
         
-        return best_displacement_slot
+        # Try single displacement first
+        for slot in displaceable_tasks:
+            score = self._evaluate_single_displacement(quest, slot, required_duration)
+            print(f"      📈 Single displacement score for '{slot.occupant.title}': {score}")
+            if score > best_score:
+                best_score = score
+                best_displacement = ([slot], score)
+                print(f"      ✅ New best single displacement: {slot.occupant.title} (score: {score})")
+        
+        # Try multi-event displacements (up to 3 tasks)
+        for num_tasks in range(2, min(4, len(displaceable_tasks) + 1)):
+            print(f"      🔄 Evaluating {num_tasks}-task displacements...")
+            # Generate combinations of num_tasks
+            for task_combination in combinations(displaceable_tasks, num_tasks):
+                score = self._evaluate_multi_displacement(quest, list(task_combination), required_duration)
+                task_names = [slot.occupant.title for slot in task_combination]
+                print(f"      📈 Multi displacement score for {task_names}: {score}")
+                if score > best_score:
+                    best_score = score
+                    best_displacement = (list(task_combination), score)
+                    print(f"      ✅ New best multi displacement: {task_names} (score: {score})")
+        
+        # If we found a good displacement, perform it
+        if best_displacement and best_score > 0:  # Only displace if score is positive
+            slots_to_displace, score = best_displacement
+            return self._perform_comprehensive_displacement(quest, slots_to_displace, required_duration)
+        
+        return None
+    
+    def _evaluate_single_displacement(self, quest: Quest, slot_to_displace: CleanTimeSlot, required_duration: timedelta) -> float:
+        """Evaluate the score for displacing a single task."""
+        displaced_task = slot_to_displace.occupant
+        
+        # Check if there's enough time around this slot
+        total_available_time = self._find_available_time_around_slot(slot_to_displace)
+        if total_available_time < required_duration:
+            return float('-inf')  # Not enough time
+        
+        # Find the optimal slot that would be created
+        # Temporarily remove the task to test
+        original_occupant = slot_to_displace.occupant
+        slot_to_displace.occupant = AVAILABLE
+        self._merge_adjacent_available_slots()
+        
+        optimal_slot = self._find_optimal_slot(quest, required_duration)
+        
+        # Restore the task
+        slot_to_displace.occupant = original_occupant
+        self._merge_adjacent_available_slots()
+        
+        if not optimal_slot:
+            return float('-inf')
+        
+        # Calculate displacement score
+        displacement_score = self._calculate_displacement_score(quest, optimal_slot, displaced_task, slot_to_displace)
+        
+        # Add reschedulability penalty
+        reschedule_penalty = self._calculate_reschedule_difficulty(displaced_task)
+        
+        total_score = displacement_score - reschedule_penalty
+        print(f"         📊 Displacement score: {displacement_score}, Reschedule penalty: {reschedule_penalty}, Total: {total_score}")
+        
+        return total_score
+    
+    def _evaluate_multi_displacement(self, quest: Quest, slots_to_displace: List[CleanTimeSlot], required_duration: timedelta) -> float:
+        """Evaluate the score for displacing multiple tasks."""
+        displaced_tasks = [slot.occupant for slot in slots_to_displace]
+        
+        # Check if there's enough total time
+        total_available_time = sum(slot.duration().total_seconds() / 60 for slot in slots_to_displace)  # Convert to minutes
+        required_minutes = required_duration.total_seconds() / 60
+        if total_available_time < required_minutes:
+            return float('-inf')
+        
+        # Temporarily remove all tasks to test
+        original_occupants = []
+        for slot in slots_to_displace:
+            original_occupants.append(slot.occupant)
+            slot.occupant = AVAILABLE
+        
+        self._merge_adjacent_available_slots()
+        
+        optimal_slot = self._find_optimal_slot(quest, required_duration)
+        
+        # Restore all tasks
+        for slot, occupant in zip(slots_to_displace, original_occupants):
+            slot.occupant = occupant
+        self._merge_adjacent_available_slots()
+        
+        if not optimal_slot:
+            return float('-inf')
+        
+        # Calculate base displacement score (sum of individual scores)
+        total_displacement_score = 0
+        total_reschedule_penalty = 0
+        
+        for slot, task in zip(slots_to_displace, displaced_tasks):
+            individual_score = self._calculate_displacement_score(quest, optimal_slot, task, slot)
+            total_displacement_score += individual_score
+            total_reschedule_penalty += self._calculate_reschedule_difficulty(task)
+        
+        # Multi-displacement penalty (displacing multiple tasks is harder)
+        multi_penalty = len(slots_to_displace) * 0.5
+        
+        return total_displacement_score - total_reschedule_penalty - multi_penalty
+    
+    def _calculate_reschedule_difficulty(self, task: Quest) -> float:
+        """Calculate how difficult it would be to reschedule a task."""
+        difficulty = 0.0
+        
+        # Scheduling flexibility penalty (REDUCED PENALTIES)
+        if hasattr(task, 'scheduling_flexibility'):
+            if task.scheduling_flexibility == SchedulingFlexibility.WINDOW:
+                difficulty += 0.5  # Reduced from 2.0
+            elif task.scheduling_flexibility == SchedulingFlexibility.STRICT:
+                difficulty += 0.3  # Reduced from 1.5
+            elif task.scheduling_flexibility == SchedulingFlexibility.FLEXIBLE:
+                difficulty += 0.1  # Reduced from 0.5
+        
+        # Duration penalty (REDUCED PENALTIES)
+        if task.duration_minutes:
+            hours = task.duration_minutes / 60
+            if hours >= 4:
+                difficulty += 0.5  # Reduced from 2.0
+            elif hours >= 2:
+                difficulty += 0.3  # Reduced from 1.0
+            elif hours >= 1:
+                difficulty += 0.1  # Reduced from 0.5
+        
+        # Deadline urgency penalty (REDUCED PENALTIES)
+        if task.deadline:
+            days_until_deadline = (task.deadline - datetime.now()).days
+            if days_until_deadline <= 1:
+                difficulty += 0.5  # Reduced from 3.0
+            elif days_until_deadline <= 3:
+                difficulty += 0.3  # Reduced from 2.0
+            elif days_until_deadline <= 7:
+                difficulty += 0.1  # Reduced from 1.0
+        
+        return difficulty
+    
+    def _perform_comprehensive_displacement(self, quest: Quest, slots_to_displace: List[CleanTimeSlot], required_duration: timedelta) -> Optional[CleanTimeSlot]:
+        """Actually perform the displacement and return the optimal slot."""
+        displaced_tasks = []
+        
+        # Remove all tasks to be displaced
+        for slot in slots_to_displace:
+            displaced_tasks.append((slot, slot.occupant))
+            slot.occupant = AVAILABLE
+        
+        # Merge adjacent slots
+        self._merge_adjacent_available_slots()
+        
+        # Find the optimal slot for the new quest
+        optimal_slot = self._find_optimal_slot(quest, required_duration)
+        if not optimal_slot:
+            # Restore displaced tasks if we can't find a slot
+            for slot, task in displaced_tasks:
+                slot.occupant = task
+            self._merge_adjacent_available_slots()
+            return None
+        
+        # Reserve the optimal slot by temporarily marking it as occupied
+        original_optimal_occupant = optimal_slot.occupant
+        optimal_slot.occupant = "RESERVED"
+        
+        # Reschedule all displaced tasks
+        failed_reschedules = []
+        for slot, displaced_task in displaced_tasks:
+            print(f'      🔄 Rescheduling displaced task: {displaced_task.title} (original slot: {slot.start.strftime("%Y-%m-%d %H:%M")}-{slot.end.strftime("%H:%M")})')
+            displaced_duration = timedelta(minutes=displaced_task.duration_minutes or 60)
+            reschedule_result = self.schedule_task_with_buffers(displaced_task, displaced_duration)
+            if reschedule_result:
+                for res in reschedule_result:
+                    print(f'         ↪️  Rescheduled to: {res.start.strftime("%Y-%m-%d %H:%M")}-{res.end.strftime("%H:%M")})')
+            else:
+                print(f'         ❌ Failed to reschedule: {displaced_task.title}')
+            if not reschedule_result:
+                failed_reschedules.append((slot, displaced_task))
+        
+        # Restore the optimal slot
+        optimal_slot.occupant = original_optimal_occupant
+        
+        # If any tasks failed to reschedule, restore them to their original slots
+        for slot, task in failed_reschedules:
+            slot.occupant = task
+        self._merge_adjacent_available_slots()
+        
+        print(f'      ✅ Displacement successful: {len(displaced_tasks)} tasks displaced, {len(failed_reschedules)} failed to reschedule')
+        return optimal_slot
+    
+    def _find_available_time_around_slot(self, task_slot: CleanTimeSlot) -> timedelta:
+        """
+        Find the total available time around a task slot (including the task's own duration).
+        This uses the same logic as the working method in metaheuristic.py.
+        """
+        # Start with the task's own duration
+        total_available = task_slot.duration()
+        
+        # Look for AVAILABLE slots that are adjacent to this task
+        for slot in self.slots:
+            if slot.occupant == AVAILABLE:
+                # Check if this available slot is adjacent to the task
+                if slot.end <= task_slot.start:
+                    # Available slot ends before task starts
+                    adjacent_time = task_slot.start - slot.end
+                    total_available += adjacent_time
+                elif slot.start >= task_slot.end:
+                    # Available slot starts after task ends
+                    adjacent_time = slot.start - task_slot.end
+                    total_available += adjacent_time
+        
+        # If no AVAILABLE slots found, calculate available time based on day boundaries
+        if total_available == task_slot.duration():  # Only the task's own duration
+            # Find the day boundaries for this task
+            day_start = task_slot.start.replace(hour=7, minute=0, second=0, microsecond=0)  # 7 AM
+            day_end = task_slot.start.replace(hour=22, minute=0, second=0, microsecond=0)   # 10 PM
+            
+            # Calculate available time before and after the task
+            available_before = task_slot.start - day_start
+            available_after = day_end - task_slot.end
+            
+            if available_before > timedelta(0):
+                total_available += available_before
+            if available_after > timedelta(0):
+                total_available += available_after
+        
+        return total_available
     
     def _calculate_displacement_score(self, new_quest: Quest, new_slot: CleanTimeSlot, 
                                     displaced_task: Quest, original_slot: CleanTimeSlot) -> float:
@@ -1212,57 +1656,60 @@ class CleanScheduler:
         Calculate the score for a displacement decision.
         Higher score = better displacement choice.
         """
-        # Base score: priority difference (higher is better)
-        priority_diff = new_quest.priority - displaced_task.priority
+        # Base score: priority difference (higher is better) - INCREASED WEIGHT
+        priority_diff = (new_quest.priority - displaced_task.priority) * 5  # Increased from 2 to 5
         
         # Time preference bonus for new task
         time_pref_bonus = self._calculate_time_preference_score(new_quest, new_slot)
         
-        # Penalty for displacing a task (but less than the priority benefit)
-        displacement_penalty = -0.5
+        # Deadline urgency penalty for displaced task (REDUCED PENALTIES)
+        deadline_penalty = 0
+        if displaced_task.deadline:
+            days_until_deadline = (displaced_task.deadline - datetime.now()).days
+            if days_until_deadline <= 1:
+                deadline_penalty = -1.0  # Reduced from -3.0
+            elif days_until_deadline <= 3:
+                deadline_penalty = -0.5  # Reduced from -2.0
+            elif days_until_deadline <= 7:
+                deadline_penalty = -0.2  # Reduced from -1.0
         
-        return priority_diff + time_pref_bonus + displacement_penalty
+        # Scheduling flexibility penalty (REDUCED PENALTIES)
+        flexibility_penalty = 0
+        if hasattr(displaced_task, 'scheduling_flexibility'):
+            if displaced_task.scheduling_flexibility == SchedulingFlexibility.FIXED:
+                flexibility_penalty = -2.0  # Reduced from -5.0
+            elif displaced_task.scheduling_flexibility == SchedulingFlexibility.WINDOW:
+                flexibility_penalty = -0.5  # Reduced from -2.0
+            elif displaced_task.scheduling_flexibility == SchedulingFlexibility.STRICT:
+                flexibility_penalty = -0.3  # Reduced from -1.5
+            elif displaced_task.scheduling_flexibility == SchedulingFlexibility.FLEXIBLE:
+                flexibility_penalty = -0.1  # Reduced from -0.5
+        
+        # Duration penalty (REDUCED PENALTIES)
+        duration_penalty = 0
+        if displaced_task.duration_minutes:
+            hours = displaced_task.duration_minutes / 60
+            if hours >= 4:
+                duration_penalty = -0.5  # Reduced from -2.0
+            elif hours >= 2:
+                duration_penalty = -0.3  # Reduced from -1.0
+            elif hours >= 1:
+                duration_penalty = -0.1  # Reduced from -0.5
+            # Short tasks get no penalty
+        
+        # Current slot quality bonus (if displaced task is in a poor slot, less penalty)
+        current_slot_quality = self._calculate_time_preference_score(displaced_task, original_slot)
+        slot_quality_bonus = current_slot_quality * 0.5  # Reduce penalty if current slot is poor
+        
+        # Add a small positive base score to encourage displacement when beneficial
+        base_score = 0.1
+        
+        total_score = (priority_diff + time_pref_bonus + deadline_penalty + 
+                      flexibility_penalty + duration_penalty + slot_quality_bonus + base_score)
+        
+        return total_score
 
-    def _perform_displacement(self, quest: Quest, optimal_slot: CleanTimeSlot, required_duration: timedelta) -> Optional[Quest]:
-        """
-        Actually perform the displacement by removing the displaced task and returning it for rescheduling.
-        Returns the displaced task if displacement was successful, None otherwise.
-        """
-        if not quest.priority:
-            return None
-        
-        quest_priority = quest.priority
-        
-        # Find the best task to displace
-        best_displacement = None
-        best_score = float('-inf')
-        
-        for slot in self.slots:
-            if (slot.occupant and 
-                hasattr(slot.occupant, 'priority') and 
-                slot.occupant.priority and 
-                slot.occupant.priority < quest_priority):
-                
-                # Check if displacing this task would create enough space
-                displaced_task = slot.occupant
-                slot_duration = slot.duration()
-                
-                if slot_duration >= required_duration:
-                    # Score this displacement
-                    displacement_score = self._calculate_displacement_score(
-                        quest, optimal_slot, displaced_task, slot
-                    )
-                    if displacement_score > best_score:
-                        best_score = displacement_score
-                        best_displacement = (slot, displaced_task)
-        
-        if best_displacement:
-            slot_to_displace, displaced_task = best_displacement
-            # Remove the displaced task
-            slot_to_displace.occupant = AVAILABLE
-            return displaced_task
-        
-        return None
+
 
     def _should_chunk_task(self, quest: Quest, duration: timedelta) -> bool:
         """
@@ -1431,6 +1878,10 @@ class CleanScheduler:
         best_score = -1
         
         for slot in available_slots:
+            # Check if this slot is allowed for the quest
+            if not self._is_slot_allowed(chunk_quest, slot):
+                continue  # Skip slots that don't meet constraints
+            
             score = self._calculate_slot_score(chunk_quest, slot)
             if score > best_score:
                 best_score = score
@@ -1723,6 +2174,13 @@ class CleanScheduler:
         task_end = task_start + duration
         buffer_after_end = task_end + timedelta(minutes=buffer_after)
         
+        # Debug output for gym workouts
+        if "Gym Workout" in quest.title:
+            print(f"      🏋️ SCHEDULING: '{quest.title}' (ID: {quest.id})")
+            print(f"         📅 Slot: {slot.start.strftime('%Y-%m-%d %H:%M')} - {slot.end.strftime('%H:%M')}")
+            print(f"         ⏰ Task: {task_start.strftime('%H:%M')} - {task_end.strftime('%H:%M')}")
+            print(f"         🔧 Buffer before: {buffer_before}min, after: {buffer_after}min")
+        
         # Create the scheduled slots
         scheduled_slots = []
         
@@ -1751,6 +2209,11 @@ class CleanScheduler:
         # Track the slots for this event
         if hasattr(quest, 'id'):
             self.event_slots[quest.id] = scheduled_slots
+        
+        # Debug: print all slots after scheduling
+        print(f"      🔧 All slots after scheduling {quest.title}:")
+        for i, s in enumerate(self.slots):
+            print(f"         Slot {i}: {s.start} - {s.end} ({s.occupant})")
         
         return scheduled_slots
     

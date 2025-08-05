@@ -216,7 +216,7 @@ class QuestCreate(BaseModel):
     
     # Scheduling fields
     priority: int = 2  # Default to MEDIUM priority
-    due_at: Optional[datetime] = None
+    # due_at field removed - only deadline is used for date constraints
     preferred_time_of_day: PreferredTimeOfDay = PreferredTimeOfDay.NO_PREFERENCE
     duration_minutes: Optional[int] = None
     
@@ -256,7 +256,7 @@ class QuestUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     priority: Optional[int] = None
-    due_at: Optional[datetime] = None
+    # due_at field removed - only deadline is used for date constraints
     preferred_time_of_day: Optional[PreferredTimeOfDay] = None
     duration_minutes: Optional[int] = None
     chunk_index: Optional[int] = None
@@ -290,7 +290,7 @@ class QuestOut(BaseModel):
     
     # Scheduling fields
     priority: int
-    due_at: Optional[datetime]
+    # due_at field removed - only deadline is used for date constraints
     preferred_time_of_day: PreferredTimeOfDay
     duration_minutes: Optional[int]
     

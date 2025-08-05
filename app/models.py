@@ -274,7 +274,6 @@ class Quest(Base):
     time_limit_to_complete: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     xp_reward: Mapped[int] = mapped_column(Integer, default=10)
-    deadline: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     time_limit_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     repeatable: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -292,7 +291,8 @@ class Quest(Base):
 
     # Scheduling fields (merged from QuestInstance)
     priority: Mapped[int] = mapped_column(Integer, default=2)  # Default to MEDIUM priority
-    due_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # due_at field removed - only deadline is used for date constraints
+    deadline: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # Absolute deadline (hard constraint)
     preferred_time_of_day: Mapped[PreferredTimeOfDay] = mapped_column(Enum(PreferredTimeOfDay), default=PreferredTimeOfDay.NO_PREFERENCE)
     duration_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Use this instead of time_limit_minutes
     
@@ -326,8 +326,10 @@ class Quest(Base):
     scheduling_flexibility: Mapped[SchedulingFlexibility] = mapped_column(Enum(SchedulingFlexibility), default=SchedulingFlexibility.FLEXIBLE)
     
     # Time window constraints (for AI scheduling)
-    soft_start: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)  # Preferred start time (soft limit)
-    soft_end: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)    # Preferred end time (soft limit)
+    expected_start: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)  # Expected start time (highest score)
+    expected_end: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)    # Expected end time (highest score)
+    soft_start: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)  # Preferred fall back window start(soft limit)
+    soft_end: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)    # Preferred fall back window end time (soft limit)
     hard_start: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)  # Must start after this time (hard limit)
     hard_end: Mapped[Optional[Time]] = mapped_column(Time, nullable=True)    # Must end before this time (hard limit)
     

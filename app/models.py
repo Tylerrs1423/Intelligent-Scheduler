@@ -317,6 +317,8 @@ class Quest(Base):
     
     # Recurrence field - RRULE string (RFC 5545 standard)
     recurrence_rule: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # RRULE string for recurrence patterns
+    # Recurrence linkage (self-referential, separate from chunking)
+    recurrence_parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("quests.id"), nullable=True)
     
     # Buffer fields
     buffer_before: Mapped[int] = mapped_column(Integer, default=0)  # minutes
@@ -345,8 +347,31 @@ class Quest(Base):
     template = relationship("MainDailyQuestTemplate", back_populates="quests")
     
     # Parent-child relationships for chunked tasks
-    parent_quest = relationship("Quest", remote_side=[id], back_populates="chunk_quests")
-    chunk_quests = relationship("Quest", back_populates="parent_quest", cascade="all, delete-orphan")
+    parent_quest = relationship(
+        "Quest",
+        remote_side=[id],
+        back_populates="chunk_quests",
+        foreign_keys="Quest.parent_quest_id",
+    )
+    chunk_quests = relationship(
+        "Quest",
+        back_populates="parent_quest",
+        cascade="all, delete-orphan",
+        foreign_keys="Quest.parent_quest_id",
+    )
+    
+    # Recurrence relationships (do not reuse chunking relationships)
+    recurrence_parent = relationship(
+        "Quest",
+        remote_side=[id],
+        back_populates="recurrence_children",
+        foreign_keys="Quest.recurrence_parent_id",
+    )
+    recurrence_children = relationship(
+        "Quest",
+        back_populates="recurrence_parent",
+        foreign_keys="Quest.recurrence_parent_id",
+    )
 
 class QuestSubtask(Base):
     __tablename__ = "quest_subtasks"

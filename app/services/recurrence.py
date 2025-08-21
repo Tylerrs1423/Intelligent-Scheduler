@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 from dateutil import rrule
 from app.models import Quest, SchedulingFlexibility
+from sqlalchemy.orm import Session
 
 
 def expand_recurring_quest(quest: Quest, start_date: datetime, end_date: datetime) -> List[Quest]:
@@ -57,8 +58,15 @@ def create_quest_instance(quest: Quest, occurrence_date: datetime, instance_numb
     - WINDOW: Must be within preferred time window
     - FLEXIBLE: Can be moved anywhere
     """
+    # Create a unique, in-memory id for the instance to avoid collisions during scheduling
+    # Use a negative composite id so it won't collide with DB-generated positives
+    if getattr(quest, 'id', None) is not None:
+        instance_id = -(quest.id * 10000 + instance_number)
+    else:
+        instance_id = -instance_number
+
     return Quest(
-        id=quest.id,  # Preserve the original quest ID
+        id=instance_id,
         title=quest.title,
         description=quest.description,
         xp_reward=quest.xp_reward,
@@ -83,6 +91,7 @@ def create_quest_instance(quest: Quest, occurrence_date: datetime, instance_numb
         
         # Recurrence field (preserve for day constraint checking)
         recurrence_rule=quest.recurrence_rule,
+        recurrence_parent_id=getattr(quest, 'id', None),
         
         # Buffer fields
         buffer_before=quest.buffer_before,
@@ -107,6 +116,94 @@ def create_quest_instance(quest: Quest, occurrence_date: datetime, instance_numb
         is_main_daily_quest=quest.is_main_daily_quest,
         template_id=quest.template_id
     )
+
+
+# --- Sync utilities ---
+
+# Fields that are safe/useful to sync from the parent to all recurrence children.
+_DEFAULT_SYNC_FIELDS = [
+    # Presentation / meta
+    "title",
+    "description",
+    "xp_reward",
+    "theme_tags",
+    # Scheduling core
+    "priority",
+    "preferred_time_of_day",
+    "duration_minutes",
+    "buffer_before",
+    "buffer_after",
+    "scheduling_flexibility",
+    # Time windows
+    "expected_start",
+    "expected_end",
+    "soft_start",
+    "soft_end",
+    "hard_start",
+    "hard_end",
+    # Overrides
+    "allow_time_deviation",
+    "allow_urgent_override",
+    "allow_same_day_recurring",
+]
+
+
+def sync_recurrence_children(
+    db: Session,
+    parent_quest: Quest,
+    fields: list[str] | None = None,
+    exclude_fields: list[str] | None = None,
+) -> int:
+    """
+    Sync selected fields from a parent quest (series definition) to all of its
+    recurrence children (instances) in the database.
+
+    Returns the number of children updated.
+
+    Notes:
+    - This does NOT change child-specific state like status/completion timestamps.
+    - If you changed the RRULE, consider re-expanding (delete & regenerate children)
+      rather than syncing, since day/time semantics may differ.
+    """
+    fields_to_sync = set(fields or _DEFAULT_SYNC_FIELDS)
+    if exclude_fields:
+        fields_to_sync.difference_update(exclude_fields)
+
+    # Never sync these identifiers/state fields
+    forbidden = {
+        "id",
+        "owner_id",
+        "recurrence_parent_id",
+        "parent_quest_id",
+        "status",
+        "completed_at",
+        "sent_out_at",
+        "is_main_daily_quest",
+        "chunk_index",
+        "chunk_count",
+        "is_chunked",
+        "base_title",
+        "chunk_duration_minutes",
+        "chunk_preference",
+        "chunk_size_preference",
+        "chunk_strategy",
+        "deadline",  # children may have their own computed deadlines (e.g., FIXED)
+    }
+    fields_to_sync.difference_update(forbidden)
+
+    children: list[Quest] = (
+        db.query(Quest).filter(Quest.recurrence_parent_id == parent_quest.id).all()
+    )
+
+    for child in children:
+        for attr in fields_to_sync:
+            if hasattr(parent_quest, attr):
+                setattr(child, attr, getattr(parent_quest, attr))
+
+    if children:
+        db.commit()
+
+    return len(children)
 
 
 # Convenience functions for common RRULE patterns

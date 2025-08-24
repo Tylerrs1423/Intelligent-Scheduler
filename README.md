@@ -1,228 +1,219 @@
-# AI Foco API
+# AI Foco - Backend API
 
-A FastAPI application with JWT authentication and refresh tokens, organized in a modular structure.
+A FastAPI backend for event scheduling and management. This backend provides a complete API for creating, managing, and displaying calendar events.
 
-## Project Structure
+## 🚀 Quick Start
 
-```
-ai_foco/
-├── app/
-│   ├── __init__.py
-│   ├── main.py          # FastAPI app entry point
-│   ├── models.py        # SQLAlchemy models
-│   ├── schemas.py       # Pydantic models
-│   ├── database.py      # DB connection + session
-│   ├── auth.py          # All auth logic: create tokens, verify, refresh
-│   └── routes/
-│       ├── __init__.py
-│       ├── users.py      # Registration, login routes
-│       └── protected.py  # Protected route example
-├── .env
-├── requirements.txt
-└── README.md
-```
+### Prerequisites
+- Python 3.8+
+- pip
 
-## Features
-
-- ✅ JWT Authentication with access and refresh tokens
-- ✅ User registration and login
-- ✅ Protected routes requiring authentication
-- ✅ Token refresh functionality
-- ✅ Modular code structure
-- ✅ SQLAlchemy ORM with SQLite
-- ✅ Pydantic validation
-- ✅ FastAPI automatic documentation
-
-## Quick Start
-
-### 1. Install Dependencies
-
+### Setup
 ```bash
+# Clone the repository
+git clone <your-repo-url>
+cd ai-foco
+
+# Create virtual environment
+python -m venv env
+
+# Activate virtual environment
+# On Mac/Linux:
+source env/bin/activate
+# On Windows:
+env\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Start the server
+python -m app.main
 ```
 
-### 2. Set Up Environment Variables
+The server will start at `http://localhost:8000`
 
-Create a `.env` file in the root directory:
+## 📖 API Documentation
 
+- **Interactive Docs:** `http://localhost:8000/docs` (Swagger UI)
+- **Alternative Docs:** `http://localhost:8000/redoc`
+- **Health Check:** `http://localhost:8000/health`
+
+## 🔐 Authentication
+
+All endpoints require authentication using JWT tokens.
+
+### 1. Register a User
 ```bash
-SECRET_KEY=your-secret-key-here-make-it-long-and-random
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
-REFRESH_TOKEN_EXPIRE_DAYS=7
+POST /users/register
+Content-Type: application/json
+
+{
+  "username": "yourname",
+  "email": "your@email.com", 
+  "password": "yourpassword"
+}
 ```
 
-### 3. Run the Application
-
+### 2. Login to Get Token
 ```bash
-uvicorn app.main:app --reload
+POST /users/login
+Content-Type: application/json
+
+{
+  "username": "yourname",
+  "password": "yourpassword"
+}
 ```
 
-### 4. Access the API
-
-- **API Documentation**: http://localhost:8000/docs
-- **Alternative Docs**: http://localhost:8000/redoc
-- **Health Check**: http://localhost:8000/health
-
-## API Endpoints
-
-### Authentication
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| PUT | `/users/register` | Register a new user |
-| POST | `/users/login` | Login (OAuth2 form data) |
-| POST | `/users/refresh` | Refresh access token |
-
-### Protected Routes
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/protected/` | Example protected route |
-| GET | `/protected/me` | Get current user info |
-| GET | `/protected/admin` | Admin route example |
-
-### Utility
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/` | API information |
-| GET | `/health` | Health check |
-
-## Usage Examples
-
-### Register a User
-
-```bash
-curl -X PUT "http://localhost:8000/users/register" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "username": "testuser",
-       "email": "test@example.com",
-       "password": "password123"
-     }'
-```
-
-### Login
-
-```bash
-curl -X POST "http://localhost:8000/users/login" \
-     -d "username=testuser&password=password123"
-```
-
-**Response:**
+**Response includes:**
 ```json
 {
-  "access_token": "eyJ...",
-  "refresh_token": "eyJ...",
+  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+  "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
   "token_type": "bearer"
 }
 ```
 
-### Access Protected Route
-
+### 3. Use Token in Requests
 ```bash
-curl -X GET "http://localhost:8000/protected/" \
-     -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+Authorization: Bearer <your-access-token>
 ```
 
-### Refresh Token
+## 📅 Event Management API
 
+### Create Event
 ```bash
-curl -X POST "http://localhost:8000/users/refresh" \
-     -H "Content-Type: application/json" \
-     -d '{"refresh_token": "YOUR_REFRESH_TOKEN"}'
+POST /events/create
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "title": "Team Meeting",
+  "description": "Weekly standup",
+  "start_time": "2024-01-15T09:00:00",
+  "end_time": "2024-01-15T10:00:00",
+  "scheduling_flexibility": "fixed",
+  "buffer_before": 15,
+  "buffer_after": 15
+}
 ```
 
-## Testing
-
-Run the comprehensive test script:
-
+### Get All Events
 ```bash
-python test_token_usage.py
+GET /events/
+Authorization: Bearer <token>
 ```
 
-This will test:
-- User registration
-- Login and token generation
-- Protected route access
-- Token refresh functionality
-- Error handling
+### Get Event by ID
+```bash
+GET /events/{event_id}
+Authorization: Bearer <token>
+```
 
-## Code Organization
+### Get Events by Date
+```bash
+GET /events/date?date=2024-01-15
+Authorization: Bearer <token>
+```
 
-### `app/main.py`
-- FastAPI application entry point
-- Router registration
-- Database table creation
+### Get Events by Date Range
+```bash
+GET /events/date_range?start_date=2024-01-15&end_date=2024-01-16
+Authorization: Bearer <token>
+```
 
-### `app/database.py`
-- SQLAlchemy engine and session setup
-- Database connection management
+### Update Event
+```bash
+PUT /events/update/{event_id}
+Authorization: Bearer <token>
+Content-Type: application/json
 
-### `app/models.py`
-- SQLAlchemy ORM models
-- Database table definitions
+{
+  "title": "Updated Meeting Title",
+  "buffer_before": 30
+}
+```
 
-### `app/schemas.py`
-- Pydantic models for request/response validation
-- API input/output schemas
+### Delete Event
+```bash
+DELETE /events/delete/{event_id}
+Authorization: Bearer <token>
+```
 
-### `app/auth.py`
-- JWT token creation and verification
-- Password hashing and verification
-- OAuth2 scheme configuration
+## 📊 Schedule Display API
 
-### `app/routes/users.py`
-- User registration and login endpoints
-- Token refresh endpoint
+### Get Formatted Schedule
+```bash
+GET /schedule/?start_date=2024-01-15&end_date=2024-01-15
+Authorization: Bearer <token>
+```
 
-### `app/routes/protected.py`
-- Protected route examples
-- Authentication-required endpoints
+**Response format:**
+```json
+{
+  "events": [
+    {
+      "id": 1,
+      "start_time": "2024-01-15T09:00:00",
+      "end_time": "2024-01-15T10:00:00",
+      "title": "Team Meeting",
+      "description": "Weekly standup",
+      "scheduling_flexibility": "fixed",
+      "buffer_before": 15,
+      "buffer_after": 15
+    }
+  ]
+}
+```
 
-## Security Features
+## 🔧 Event Schema
 
-- **Access Tokens**: Short-lived (30 minutes) for API access
-- **Refresh Tokens**: Long-lived (7 days) for token renewal
-- **Token Type Validation**: Prevents token type confusion
-- **Password Hashing**: bcrypt for secure password storage
-- **JWT Claims**: Includes token type and expiration
+### Required Fields
+- `title`: Event title (string)
+- `start_time`: Start datetime (ISO format: "2024-01-15T09:00:00")
+- `end_time`: End datetime (ISO format: "2024-01-15T10:00:00")
 
-## Environment Variables
+### Optional Fields
+- `description`: Event description (string, default: "")
+- `scheduling_flexibility`: "fixed", "strict", "flexible", "window", "window_unstrict"
+- `buffer_before`: Minutes before event (integer)
+- `buffer_after`: Minutes after event (integer)
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `SECRET_KEY` | JWT signing secret | Required |
-| `ALGORITHM` | JWT algorithm | HS256 |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | Access token lifetime | 30 |
-| `REFRESH_TOKEN_EXPIRE_DAYS` | Refresh token lifetime | 7 |
+## 🎯 Frontend Development Tips
 
-## Development
+1. **Store the JWT token** after login (localStorage, sessionStorage, or state management)
+2. **Include the token** in the Authorization header for all API calls
+3. **Handle token expiration** - tokens expire after 24 hours
+4. **Use ISO datetime format** for all date/time fields
+5. **The schedule endpoint** returns data formatted for easy frontend consumption
 
-### Adding New Routes
+## 🐛 Troubleshooting
 
-1. Create a new file in `app/routes/`
-2. Define your router with endpoints
-3. Import and include the router in `app/main.py`
+### Common Issues
+- **401 Unauthorized**: Check if your JWT token is valid and included in headers
+- **422 Validation Error**: Check your request body format and enum values
+- **500 Internal Server Error**: Check server logs for details
 
-### Adding New Models
+### Token Expiration
+If you get "Could not validate credentials", your token has expired. Re-login to get a new token.
 
-1. Add the model to `app/models.py`
-2. Create corresponding schemas in `app/schemas.py`
-3. Update database migrations if needed
+## 📁 Project Structure
+```
+app/
+├── main.py              # FastAPI app and route registration
+├── models.py            # Database models (Event, User)
+├── schemas.py           # Pydantic schemas for validation
+├── routes/
+│   ├── events.py        # Event CRUD endpoints
+│   ├── schedule.py      # Schedule display endpoint
+│   └── users.py         # User authentication
+└── scheduling/          # Core scheduling logic
+```
 
-### Adding New Authentication Features
+## 🚀 Ready to Build!
 
-1. Add functions to `app/auth.py`
-2. Import and use in your route handlers
+Your backend is fully functional and ready for frontend development. Start building your calendar interface, event forms, and schedule display!
 
-## Production Considerations
+---
 
-- Use a production database (PostgreSQL, MySQL)
-- Store refresh tokens in database for revocation
-- Use environment-specific configuration
-- Implement rate limiting
-- Add logging and monitoring
-- Use HTTPS in production
-- Consider token rotation strategies
+**Need help?** Check the API docs at `http://localhost:8000/docs` or create an issue in the repository.

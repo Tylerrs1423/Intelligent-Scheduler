@@ -3,6 +3,7 @@ from datetime import datetime, time
 from typing import Optional, List, Tuple
 from .models import UserRole, QuestStatus, QuestCategory, QuestGeneration, QuestType, QuestDifficulty, GoalStatus, PriorityLevel, MeasurementType, TaskType, UserIntensityProfile, SourceType, EventMood, PreferredTimeOfDay, TaskDifficulty, SchedulingFlexibility
 
+# ----------------- User Schemas ---------------------
 
 
 class DailyQuestGoal(BaseModel):
@@ -404,53 +405,53 @@ class EventCreate(BaseModel):
     start_time: datetime
     end_time: datetime
     scheduling_flexibility: SchedulingFlexibility = SchedulingFlexibility.FIXED
-    is_auto_generated: bool = False
-    source: Optional[SourceType] = None
-    source_id: Optional[int] = None
-    earliest_start: Optional[datetime] = None
-    latest_end: Optional[datetime] = None
-    priority: PriorityLevel = PriorityLevel.MEDIUM
-    allowed_days: Optional[list[int]] = None
-    soft_start: Optional[time] = None
-    soft_end: Optional[time] = None
-    hard_start: Optional[time] = None
-    hard_end: Optional[time] = None
-    min_duration: Optional[int] = None
-    max_duration: Optional[int] = None
     buffer_before: Optional[int] = None
     buffer_after: Optional[int] = None
-    recurrence_rule: Optional[str] = None
-    depends_on_event_id: Optional[int] = None
-    depends_on_quest_id: Optional[int] = None
-    mood: Optional[EventMood] = None
-    max_moves: Optional[int] = None
+    # is_auto_generated: bool = False
+    # source: Optional[SourceType] = None
+    # source_id: Optional[int] = None
+    # earliest_start: Optional[datetime] = None
+    # latest_end: Optional[datetime] = None
+    # priority: PriorityLevel = PriorityLevel.MEDIUM
+    # allowed_days: Optional[list[int]] = None
+    # soft_start: Optional[time] = None
+    # soft_end: Optional[time] = None
+    # hard_start: Optional[time] = None
+    # hard_end: Optional[time] = None
+    # min_duration: Optional[int] = None
+    # max_duration: Optional[int] = None
+    # recurrence_rule: Optional[str] = None
+    # depends_on_event_id: Optional[int] = None
+    # depends_on_quest_id: Optional[int] = None
+    # mood: Optional[EventMood] = None
+    # max_moves: Optional[int] = None
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    scheduling_flexibility: Optional[SchedulingFlexibility] = None
-    is_auto_generated: Optional[bool] = None
-    source: Optional[SourceType] = None
-    source_id: Optional[int] = None
-    earliest_start: Optional[datetime] = None
-    latest_end: Optional[datetime] = None
-    priority: Optional[PriorityLevel] = None
-    allowed_days: Optional[list[int]] = None
-    soft_start: Optional[time] = None
-    soft_end: Optional[time] = None
-    hard_start: Optional[time] = None
-    hard_end: Optional[time] = None
-    min_duration: Optional[int] = None
-    max_duration: Optional[int] = None
+    # scheduling_flexibility: Optional[SchedulingFlexibility] = None
+    # is_auto_generated: Optional[bool] = None
+    # source: Optional[SourceType] = None
+    # source_id: Optional[int] = None
+    # earliest_start: Optional[datetime] = None
+    # latest_end: Optional[datetime] = None
+    # priority: Optional[PriorityLevel] = None
+    # allowed_days: Optional[list[int]] = None
+    # soft_start: Optional[time] = None
+    # soft_end: Optional[time] = None
+    # hard_start: Optional[time] = None
+    # hard_end: Optional[time] = None
+    # min_duration: Optional[int] = None
+    # max_duration: Optional[int] = None
     buffer_before: Optional[int] = None
     buffer_after: Optional[int] = None
-    recurrence_rule: Optional[str] = None
-    depends_on_event_id: Optional[int] = None
-    depends_on_quest_id: Optional[int] = None
-    mood: Optional[EventMood] = None
-    max_moves: Optional[int] = None
+    # recurrence_rule: Optional[str] = None
+    # depends_on_event_id: Optional[int] = None
+    # depends_on_quest_id: Optional[int] = None
+    # mood: Optional[EventMood] = None
+    # max_moves: Optional[int] = None
 
 class EventOut(BaseModel):
     id: int

@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.security import HTTPBearer
 from app.database import engine
 from app.models import Base
-from app.routes import users, admin, goals, quests, templates, user_preferences, google_oauth_router, events
+from app.routes import users, events, schedule
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -16,13 +16,8 @@ app = FastAPI(
 
 # Include routers
 app.include_router(users.router, prefix="/users", tags=["users"])
-app.include_router(goals.router, prefix="/goals", tags=["goals"])
-app.include_router(quests.router, prefix="/quests", tags=["quests"])
-app.include_router(admin.router, prefix="/admin", tags=["admin"])
-app.include_router(templates.router, prefix="/templates", tags=["templates"])
-app.include_router(user_preferences.router, tags=["user-preferences"])
-app.include_router(google_oauth_router)
 app.include_router(events.router, prefix="/events", tags=["events"])
+app.include_router(schedule.router, prefix="/schedule", tags=["schedule"])
 
 @app.get("/")
 def read_root():
@@ -32,35 +27,17 @@ def read_root():
         "version": "1.0.0",
         "features": [
             "JWT Bearer Authentication with refresh tokens",
-            "Role-based authorization (user/admin)",
             "Protected routes",
-            "Admin dashboard and user management",
-            "Goal management (CRUD)",
-            "Advanced Quest system with time-based mechanics",
-            "Quest types: Regular, Daily, Hidden, Penalty, Timed",
-            "Time-based quest constraints and deadlines",
-            "Quest acceptance and completion validation",
-            "XP and Leveling system (Level 1-500)",
-            "Daily quests always give 100 XP",
-            "Penalty quests can reduce XP and levels",
-            "Progressive leveling difficulty"
+            "Event management (CRUD)",
+            "Schedule display and management"
         ],
         "endpoints": {
             "register": "POST /users/register - Create a new user",
             "login": "POST /users/login - Login with username and password",
             "refresh": "POST /users/refresh - Refresh access token",
             "profile": "GET /users/me/profile - Get user profile with level progress",
-            "stats": "GET /users/me/stats - Get detailed user statistics",
-            "goals": "CRUD /goals/ - Goal management for users",
-            "quests": "CRUD /quests/ - Quest management (standalone or task-based)",
-            "quests_generate": "POST /quests/generate/{goal_id} - Generate quest from goal",
-            "quests_daily": "GET /quests/daily/available - Available daily quests",
-            "quests_penalty": "GET /quests/penalty/active - Active penalty quests",
-            "quests_standalone": "GET /quests/standalone/available - Standalone quests",
-            "admin_dashboard": "GET /admin/dashboard - Admin dashboard (admin only)",
-            "admin_users": "GET /admin/users - View all users (admin only)",
-            "admin_stats": "GET /admin/stats - User statistics with XP data (admin only)",
-            "admin_system": "GET /admin/system-info - System information (admin only)"
+            "events": "CRUD /events/* - Event management (create, read, update, delete)",
+            "schedule": "GET /schedule/ - Get formatted schedule for frontend"
         },
         "authentication": "Bearer token in Authorization header",
         "swagger_ui": "/docs - Interactive API documentation",

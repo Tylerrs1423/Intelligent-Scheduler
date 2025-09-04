@@ -5,7 +5,8 @@ from ..models import UserQuestPreference, User, MainDailyQuestTemplate, MainDail
 from ..schemas import UserQuestPreferenceIn, UserQuestPreferenceOut
 from ..auth import get_current_user
 from datetime import time
-from ..services.scheduler import schedule_user_daily_quest
+# from ..services.scheduler import schedule_user_daily_quest  # Function doesn't exist
+from ..services.scheduler_service import scheduler_service
 from typing import List
 from pydantic import BaseModel, Field
 import pytz
@@ -58,7 +59,8 @@ def set_user_preferences(data: UserQuestPreferenceIn, db: Session = Depends(get_
         if template:
             subtasks = db.query(MainDailyQuestSubtaskTemplate).filter(MainDailyQuestSubtaskTemplate.template_id == template.id).all()
             if subtasks:
-                schedule_user_daily_quest(db, current_user, pref)
+                # schedule_user_daily_quest(db, current_user, pref)  # Function doesn't exist
+                print(f"User {current_user.id} has subtasks but schedule_user_daily_quest function is not implemented")
             else:
                 print(f"User {current_user.id} has no subtasks for their active daily quest template. Not scheduling daily quest.")
         else:
@@ -98,7 +100,8 @@ def patch_user_preferences(data: UserQuestPreferenceIn, db: Session = Depends(ge
         if template:
             subtasks = db.query(MainDailyQuestSubtaskTemplate).filter(MainDailyQuestSubtaskTemplate.template_id == template.id).all()
             if subtasks:
-                schedule_user_daily_quest(db, current_user, pref)
+                # schedule_user_daily_quest(db, current_user, pref)  # Function doesn't exist
+                print(f"User {current_user.id} has subtasks but schedule_user_daily_quest function is not implemented")
             else:
                 print(f"User {current_user.id} has no subtasks for their active daily quest template. Not scheduling daily quest.")
         else:
@@ -381,4 +384,96 @@ def remove_preferred_quest_time(
         raise HTTPException(status_code=404, detail="Specified time range not found in user's preferences")
     db.commit()
     db.refresh(pref)
-    return {"message": f"Preferred quest time range {time_range.start} to {time_range.end} (timezone: {tz_str}) removed successfully", "preferred_quest_times": pref.preferred_quest_times} 
+    return {"message": f"Preferred quest time range {time_range.start} to {time_range.end} (timezone: {tz_str}) removed successfully", "preferred_quest_times": pref.preferred_quest_times}
+
+# ================================
+# SLEEP PREFERENCES
+# ================================
+
+class SleepPreferencesUpdate(BaseModel):
+    sleep_start: time
+    sleep_end: time
+
+@router.get("/user/sleep-preferences")
+async def get_sleep_preferences(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get user's current sleep preferences."""
+    user = db.query(User).filter(User.id == current_user.id).first()
+    return {
+        "sleep_start": user.sleep_start,
+        "sleep_end": user.sleep_end,
+        "has_scheduler": current_user.id in scheduler_service.user_schedulers
+    }
+
+@router.post("/user/sleep-preferences")
+async def update_sleep_preferences(
+    preferences: SleepPreferencesUpdate = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update user's sleep preferences and create/update scheduler."""
+    try:
+        # Update sleep preferences in scheduler service
+        scheduler_service.update_sleep_preferences(
+            current_user.id, 
+            preferences.sleep_start, 
+            preferences.sleep_end, 
+            db
+        )
+        
+        return {
+            "message": "Sleep preferences updated and scheduler created",
+            "sleep_start": preferences.sleep_start,
+            "sleep_end": preferences.sleep_end,
+            "scheduler_created": True
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update sleep preferences: {str(e)}")
+
+@router.get("/user/scheduler/slots")
+async def get_scheduler_slots(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get all slots from user's scheduler (including sleep blocks)."""
+    try:
+        slots = scheduler_service.get_scheduler_slots(current_user.id, db)
+        
+        if slots is None:
+            raise HTTPException(
+                status_code=400, 
+                detail="Scheduler not found. Please set your sleep preferences first."
+            )
+        
+        # Convert slots to JSON-serializable format
+        serialized_slots = []
+        for slot in slots:
+            occupant = slot.occupant
+            if occupant == "AVAILABLE":
+                status = "AVAILABLE"
+                occupant_name = "Available"
+            elif occupant == "SLEEP":
+                status = "SLEEP"
+                occupant_name = "Sleep"
+            else:
+                status = "OCCUPIED"
+                occupant_name = getattr(occupant, 'title', str(occupant))
+            
+            serialized_slots.append({
+                "start_time": slot.start.isoformat(),
+                "end_time": slot.end.isoformat(),
+                "occupant": occupant_name,
+                "status": status
+            })
+        
+        return {
+            "slots": serialized_slots,
+            "total_slots": len(serialized_slots),
+            "user_id": current_user.id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get scheduler slots: {str(e)}") 

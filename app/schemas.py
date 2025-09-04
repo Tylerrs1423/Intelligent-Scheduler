@@ -407,12 +407,12 @@ class EventCreate(BaseModel):
     scheduling_flexibility: SchedulingFlexibility = SchedulingFlexibility.FIXED
     buffer_before: Optional[int] = None
     buffer_after: Optional[int] = None
+    priority: PriorityLevel = PriorityLevel.MEDIUM
     # is_auto_generated: bool = False
     # source: Optional[SourceType] = None
     # source_id: Optional[int] = None
     # earliest_start: Optional[datetime] = None
     # latest_end: Optional[datetime] = None
-    # priority: PriorityLevel = PriorityLevel.MEDIUM
     # allowed_days: Optional[list[int]] = None
     # soft_start: Optional[time] = None
     # soft_end: Optional[time] = None

@@ -1,11 +1,28 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 from app.database import engine
 from app.models import Base
-from app.routes import users, events, schedule
+from app.routes import users, events, schedule, user_preferences
+from app.services.scheduler_service import scheduler_service
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# Initialize schedulers for all users on startup
+from app.database import SessionLocal
+def initialize_schedulers():
+    db = SessionLocal()
+    try:
+        scheduler_service.initialize_all_schedulers(db)
+        print("✅ Schedulers initialized for all users")
+    except Exception as e:
+        print(f"❌ Failed to initialize schedulers: {e}")
+    finally:
+        db.close()
+
+# Initialize on startup
+initialize_schedulers()
 
 # Create FastAPI app
 app = FastAPI(
@@ -14,10 +31,20 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # Frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
+)
+
 # Include routers
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(events.router, prefix="/events", tags=["events"])
 app.include_router(schedule.router, prefix="/schedule", tags=["schedule"])
+app.include_router(user_preferences.router, prefix="/users", tags=["user-preferences"])
 
 @app.get("/")
 def read_root():

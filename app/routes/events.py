@@ -55,13 +55,70 @@ async def create_event(
     current_user: User = Depends(get_current_user),
     event_in: EventCreate = Body(...),
 ):
+    # Create scheduler instance covering a reasonable window around the event
+    window_start = min(event_in.start_time, datetime.utcnow()) - timedelta(days=7)
+    window_end = max(event_in.end_time, event_in.start_time) + timedelta(days=30)
+    scheduler = CleanScheduler(window_start=window_start, window_end=window_end)
+    
+    # Load existing fixed events into scheduler timeline
+    scheduler.load_fixed_events(db)
+    
+    # Create a Quest-like object for the scheduler
+    from app.models import Quest, QuestStatus, QuestCategory, QuestType, QuestDifficulty
+    quest = Quest(
+        title=event_in.title,
+        description=event_in.description,
+        status=QuestStatus.PENDING,
+        category=QuestCategory.WORK,  # Default category
+        quest_type=QuestType.SINGLE,
+        difficulty=QuestDifficulty.MEDIUM,  # Default difficulty
+        priority=event_in.priority,
+        buffer_before=event_in.buffer_before,
+        buffer_after=event_in.buffer_after,
+        user_id=current_user.id
+    )
+    
+    # Let the scheduler handle ALL scheduling logic
+    from app.models import SchedulingFlexibility
+    if event_in.scheduling_flexibility == SchedulingFlexibility.FIXED:
+        # For fixed events, try to schedule at exact time
+        duration = event_in.end_time - event_in.start_time
+        scheduled_slots = scheduler.schedule_task_at_exact_time(
+            quest, event_in.start_time, duration, event_in.end_time
+        )
+        
+        if not scheduled_slots:
+            raise HTTPException(
+                status_code=409, 
+                detail="Cannot schedule event at requested time - conflicts with existing events"
+            )
+    else:
+        # For flexible events, let scheduler find optimal time
+        duration = event_in.end_time - event_in.start_time
+        scheduled_slots = scheduler.schedule_task_with_buffers(quest, duration)
+        
+        if not scheduled_slots:
+            raise HTTPException(
+                status_code=409, 
+                detail="Cannot find available time slot for this event"
+            )
+    
+    # Get the actual scheduled times from the scheduler
+    task_slot = next((slot for slot in scheduled_slots if slot.occupant == quest), None)
+    if not task_slot:
+        raise HTTPException(status_code=500, detail="Scheduler failed to create task slot")
+    
+    # Create the event with the scheduler-determined times
     new_event = Event(
         user_id=current_user.id,
         title=event_in.title,
         description=event_in.description,
-        start_time=event_in.start_time,
-        end_time=event_in.end_time,
+        start_time=task_slot.start,
+        end_time=task_slot.end,
         scheduling_flexibility=event_in.scheduling_flexibility,
+        priority=event_in.priority,
+        buffer_before=event_in.buffer_before,
+        buffer_after=event_in.buffer_after,
     )
 
     db.add(new_event)

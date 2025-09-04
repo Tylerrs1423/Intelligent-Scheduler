@@ -26,7 +26,7 @@ router = APIRouter(tags=["users"])
 def register_user(user: UserCreate, db: Session = Depends(get_db)):
     """Register a new user"""
     # Check if username already exists
-    db_user = db.query(User).filter(User.username == user.username).first()
+    db_user = db.query(User).filter(User.username == user.username).first() 
     if db_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -91,21 +91,37 @@ def login_user(user_data: UserLogin, db: Session = Depends(get_db)):
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 @router.post("/refresh")
-def refresh_token(request: RefreshTokenRequest):
+def refresh_token(request: RefreshTokenRequest, db: Session = Depends(get_db)):
     """Refresh access token using refresh token"""
     try:
         # Verify the refresh token
         username = verify_refresh_token(request.refresh_token)
         
-        # Generate new access token
+        # Get user from database to get their actual role
+        db_user = db.query(User).filter(User.username == username).first()
+        if not db_user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found"
+            )
+        
+        # Generate new access token with correct role
         access_token_expires = timedelta(minutes=30)
         new_access_token = create_access_token(
-            data={"sub": username, "role": "user"}, 
+            data={"sub": username, "role": db_user.role.value}, 
             expires_delta=access_token_expires
+        )
+        
+        # Generate new refresh token
+        refresh_token_expires = timedelta(days=7)
+        new_refresh_token = create_refresh_token(
+            data={"sub": username, "role": db_user.role.value}, 
+            expires_delta=refresh_token_expires
         )
         
         return {
             "access_token": new_access_token,
+            "refresh_token": new_refresh_token,
             "token_type": "bearer",
             "message": "Token refreshed successfully"
         }
@@ -167,6 +183,3 @@ def set_daily_quest_goals(
 ):
     """Set user's daily quest goals"""
     pass
-
-
-

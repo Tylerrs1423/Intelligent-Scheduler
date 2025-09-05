@@ -5,7 +5,7 @@ Persistent scheduler service that maintains user schedulers in memory.
 from datetime import datetime, timedelta, time
 from typing import Dict, Optional
 from sqlalchemy.orm import Session
-from ..models import User, Event, SchedulingFlexibility
+from ..models import User, Event, SchedulingFlexibility, PreferredTimeOfDay
 from ..scheduling.core.scheduler import CleanScheduler
 from ..scheduling.core.time_slot import CleanTimeSlot
 from ..database import get_db
@@ -115,7 +115,7 @@ class SchedulerService:
                 self.scheduling_flexibility = event.scheduling_flexibility
                 
                 # Default scheduling preferences (can be made configurable later)
-                self.preferred_time_of_day = "no_preference"
+                self.preferred_time_of_day = PreferredTimeOfDay.NO_PREFERENCE
                 self.allow_time_deviation = True
                 self.allow_urgent_override = False
                 self.allow_same_day_recurring = False
@@ -142,13 +142,21 @@ class SchedulerService:
                 self.max_duration = event.max_duration
                 self.difficulty = None  # Events don't have difficulty
                 self.recurrence_rule = event.recurrence_rule
+                self.preferred_time_of_day = getattr(event, 'preferred_time_of_day', PreferredTimeOfDay.NO_PREFERENCE)
         
         scheduling_obj = SchedulingObject(event)
-        duration = event.end_time - event.start_time
+        # Calculate duration based on event type
+        if event.scheduling_flexibility == SchedulingFlexibility.FLEXIBLE:
+            duration = timedelta(minutes=event.min_duration or 60)
+        else:
+            duration = event.end_time - event.start_time
         
         # Use the existing scheduler logic
         print(f"🔍 SCHEDULING DEBUG: Attempting to schedule event with flexibility={event.scheduling_flexibility}")
-        print(f"🔍 SCHEDULING DEBUG: Event time: {event.start_time} to {event.end_time}")
+        if event.scheduling_flexibility == SchedulingFlexibility.FIXED:
+            print(f"🔍 SCHEDULING DEBUG: Event time: {event.start_time} to {event.end_time}")
+        else:
+            print(f"🔍 SCHEDULING DEBUG: Flexible event with duration: {duration}")
         print(f"🔍 SCHEDULING DEBUG: Duration: {duration}")
         
         if event.scheduling_flexibility == SchedulingFlexibility.FIXED:

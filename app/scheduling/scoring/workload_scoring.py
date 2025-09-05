@@ -5,10 +5,9 @@ Workload-based scoring functions for slot evaluation.
 from datetime import datetime, timedelta
 from typing import List
 from ..core.time_slot import CleanTimeSlot
-from app.models import Quest
 
 
-def calculate_daily_workload_bonus(quest: Quest, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
+def calculate_daily_workload_bonus(schedulable_object, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
     """
     Calculate bonus for respecting daily workload limits.
     Hard limit: Cannot exceed daily maximum.
@@ -20,7 +19,7 @@ def calculate_daily_workload_bonus(quest: Quest, slot: CleanTimeSlot, slots: Lis
     for s in slots:
         if (s.occupant and 
             hasattr(s.occupant, 'id') and  # Check if it's a Quest object
-            s.occupant.id != quest.id and
+            s.occupant.id != schedulable_object.id and
             s.start.date() == slot_date):
             # Add task duration to daily workload
             if hasattr(s.occupant, 'duration_minutes') and s.occupant.duration_minutes:
@@ -29,23 +28,23 @@ def calculate_daily_workload_bonus(quest: Quest, slot: CleanTimeSlot, slots: Lis
                 daily_workload_hours += s.duration().total_seconds() / 3600
     
     # Add current task duration
-    quest_duration_hours = quest.duration_minutes / 60 if quest.duration_minutes else 1
+    schedulable_object_duration_hours = schedulable_object.duration_minutes / 60 if schedulable_object.duration_minutes else 1
     
     # Hard daily limit: 8 hours of focused work per day
     daily_limit_hours = 8.0
     
     # HARD LIMIT: Cannot exceed daily maximum
-    if daily_workload_hours + quest_duration_hours > daily_limit_hours:
+    if daily_workload_hours + schedulable_object_duration_hours > daily_limit_hours:
         return -1000.0  # Very strong penalty - effectively disqualifies the slot
     
     # Bonus for staying well under the limit
-    if daily_workload_hours + quest_duration_hours <= daily_limit_hours * 0.8:  # Under 80% of limit
+    if daily_workload_hours + schedulable_object_duration_hours <= daily_limit_hours * 0.8:  # Under 80% of limit
         return 0.2  # Small bonus for not overloading the day
     else:
         return 0.0  # Neutral score when approaching the limit
 
 
-def calculate_weekly_balance_score(quest: Quest, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
+def calculate_weekly_balance_score(schedulable_object, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
     """
     Calculate weekly balance score: encourage placing tasks on days with lower difficulty and workload.
     Looks at the full Monday-Sunday week, not just current day forward.
@@ -70,7 +69,7 @@ def calculate_weekly_balance_score(quest: Quest, slot: CleanTimeSlot, slots: Lis
     for s in slots:
         if (s.occupant and 
             hasattr(s.occupant, 'id') and
-            s.occupant.id != quest.id and
+            s.occupant.id != schedulable_object.id and
             week_start <= s.start.date() < week_end):
             
             day_date = s.start.date()
@@ -84,15 +83,15 @@ def calculate_weekly_balance_score(quest: Quest, slot: CleanTimeSlot, slots: Lis
             # Add difficulty score (using actual difficulty field)
             if hasattr(s.occupant, 'difficulty'):
                 # Convert QuestDifficulty enum to numeric score
-                difficulty_value = get_quest_difficulty_score(s.occupant)
+                difficulty_value = get_schedulable_object_difficulty_score(s.occupant)
                 weekly_scores[day_date]['difficulty_score'] += difficulty_value
             
             weekly_scores[day_date]['task_count'] += 1
     
     # Add current task to the target day
-    quest_duration_hours = quest.duration_minutes / 60 if quest.duration_minutes else 1
-    weekly_scores[slot_date]['workload_hours'] += quest_duration_hours
-    weekly_scores[slot_date]['difficulty_score'] += get_quest_difficulty_score(quest)
+    schedulable_object_duration_hours = schedulable_object.duration_minutes / 60 if schedulable_object.duration_minutes else 1
+    weekly_scores[slot_date]['workload_hours'] += schedulable_object_duration_hours
+    weekly_scores[slot_date]['difficulty_score'] += get_schedulable_object_difficulty_score(schedulable_object)
     weekly_scores[slot_date]['task_count'] += 1
     
     # Calculate combined score for each day (lower = better)
@@ -117,7 +116,7 @@ def calculate_weekly_balance_score(quest: Quest, slot: CleanTimeSlot, slots: Lis
     return weekly_balance_bonus
 
 
-def calculate_workload_density_score(quest: Quest, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
+def calculate_workload_density_score(schedulable_object, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
     """
     Calculate workload density: 1 - (num_tasks_scheduled_on_day / max_daily_capacity)
     Rewards open days
@@ -129,7 +128,7 @@ def calculate_workload_density_score(quest: Quest, slot: CleanTimeSlot, slots: L
     for s in slots:
         if (s.occupant and 
             hasattr(s.occupant, 'id') and  # Check if it's a Quest object
-            s.occupant.id != quest.id and
+            s.occupant.id != schedulable_object.id and
             s.start.date() == slot_date):
             num_tasks_on_day += 1
     
@@ -146,26 +145,26 @@ def calculate_workload_density_score(quest: Quest, slot: CleanTimeSlot, slots: L
     return max(0.0, 1.0 - density)
 
 
-def calculate_spacing_bonus(quest: Quest, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
+def calculate_spacing_bonus(schedulable_object, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
     """
     Calculate spacing bonus for recurring tasks
     For daily tasks: prioritize exactly 24 hours apart (same time each day)
     For weekly tasks: score higher if well-spaced from other instances
     """
-    if not quest.recurrence_rule:
+    if not schedulable_object.recurrence_rule:
         return 0.0  # Not a recurring task
     
     # Check if this is a daily recurring task
-    is_daily = "FREQ=DAILY" in quest.recurrence_rule
+    is_daily = "FREQ=DAILY" in schedulable_object.recurrence_rule
     
     # Find other instances of the same task type
     similar_tasks = []
     for s in slots:
         if (s.occupant and 
             hasattr(s.occupant, 'id') and  # Check if it's a Quest object
-            s.occupant.id != quest.id and 
+            s.occupant.id != schedulable_object.id and 
             hasattr(s.occupant, 'title') and  # Check if it has a title
-            s.occupant.title == quest.title):
+            s.occupant.title == schedulable_object.title):
             similar_tasks.append(s)
     
     if not similar_tasks:
@@ -208,16 +207,16 @@ def calculate_spacing_bonus(quest: Quest, slot: CleanTimeSlot, slots: List[Clean
             return 0.0  # Too close
 
 
-def calculate_automatic_buffer_bonus(quest: Quest, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
+def calculate_automatic_buffer_bonus(schedulable_object, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
     """
     Calculate bonus for automatic buffer time based on task difficulty and length.
     Ensures adequate breaks between demanding tasks.
     """
     # Calculate task difficulty score (1-5 scale)
-    difficulty_score = quest.priority  # Using priority as difficulty proxy
+    difficulty_score = schedulable_object.priority  # Using priority as difficulty proxy
     
     # Calculate task length in hours
-    task_length_hours = quest.duration_minutes / 60 if quest.duration_minutes else 1
+    task_length_hours = schedulable_object.duration_minutes / 60 if schedulable_object.duration_minutes else 1
     
     # Calculate required buffer time based on difficulty and length
     required_buffer_minutes = 0
@@ -245,7 +244,7 @@ def calculate_automatic_buffer_bonus(quest: Quest, slot: CleanTimeSlot, slots: L
     for s in slots:
         if (s.occupant and 
             hasattr(s.occupant, 'id') and  # Check if it's a Quest object
-            s.occupant.id != quest.id and
+            s.occupant.id != schedulable_object.id and
             s.end > buffer_start):
             # Task ends too close, not enough buffer
             return -0.3  # Penalty for insufficient buffer
@@ -253,11 +252,11 @@ def calculate_automatic_buffer_bonus(quest: Quest, slot: CleanTimeSlot, slots: L
     return 0.2  # Bonus for adequate buffer time
 
 
-def get_quest_difficulty_score(quest: Quest) -> float:
+def get_schedulable_object_difficulty_score(schedulable_object) -> float:
     """
     Convert Quest difficulty to numeric score.
     """
-    if hasattr(quest, 'difficulty') and quest.difficulty:
+    if hasattr(schedulable_object, 'difficulty') and schedulable_object.difficulty:
         # Map QuestDifficulty enum to numeric values
         difficulty_map = {
             'EASY': 1.0,
@@ -265,7 +264,7 @@ def get_quest_difficulty_score(quest: Quest) -> float:
             'HARD': 3.0,
             'EXPERT': 4.0
         }
-        return difficulty_map.get(quest.difficulty.value, 2.0)
+        return difficulty_map.get(schedulable_object.difficulty.value, 2.0)
     else:
         # Fallback to priority as difficulty proxy
-        return quest.priority 
+        return schedulable_object.priority 

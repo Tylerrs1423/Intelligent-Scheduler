@@ -4,42 +4,39 @@ Priority-based scoring functions for slot evaluation.
 
 from datetime import datetime
 from ..core.time_slot import CleanTimeSlot
-from app.models import Quest
-
-
-def calculate_priority_score(quest: Quest) -> float:
+def calculate_priority_score(schedulable_object) -> float:
     """
     Map priority to score: Low: 0.3, Medium: 0.6, High: 1.0, Very High: 1.5+
     """
-    if quest.priority == 1:
+    if schedulable_object.priority == 1:
         return 0.3  # Low priority
-    elif quest.priority == 2:
+    elif schedulable_object.priority == 2:
         return 0.6  # Medium priority
-    elif quest.priority == 3:
+    elif schedulable_object.priority == 3:
         return 0.8  # Medium-high priority
-    elif quest.priority == 4:
+    elif schedulable_object.priority == 4:
         return 1.0  # High priority
-    elif quest.priority == 5:
+    elif schedulable_object.priority == 5:
         return 1.2  # Very high priority
-    elif quest.priority == 6:
+    elif schedulable_object.priority == 6:
         return 1.5  # Extremely high priority
     else:
         return 0.5  # Default
 
 
-def calculate_task_selection_priority(quest: Quest) -> float:
+def calculate_task_selection_priority(schedulable_object) -> float:
     """
     Calculate task selection priority combining priority, urgency, and frequency.
     Higher score = higher priority for task selection order.
     """
     # Base priority score (0.3 - 1.0)
-    priority_score = calculate_priority_score(quest)
+    priority_score = calculate_priority_score(schedulable_object)
     
     # Urgency score based on deadline proximity
-    urgency_score = calculate_deadline_urgency_score(quest)
+    urgency_score = calculate_deadline_urgency_score(schedulable_object)
     
     # Frequency bonus for recurring tasks
-    frequency_score = calculate_frequency_score(quest)
+    frequency_score = calculate_frequency_score(schedulable_object)
     
     # Combine scores with weights
     # Priority is most important (50%), then urgency (40%), then frequency (10%)
@@ -52,12 +49,12 @@ def calculate_task_selection_priority(quest: Quest) -> float:
     return total_score
 
 
-def calculate_deadline_urgency_score(quest: Quest) -> float:
+def calculate_deadline_urgency_score(schedulable_object) -> float:
     """
     Calculate urgency score based on deadline proximity (0.0 - 1.0).
     Higher score = closer to deadline = more urgent.
     """
-    deadline_datetime = quest.deadline
+    deadline_datetime = schedulable_object.deadline
     if not deadline_datetime:
         return 0.0  # No urgency if no deadline
     
@@ -91,22 +88,22 @@ def calculate_deadline_urgency_score(quest: Quest) -> float:
         return max(0.1, urgency_score)
 
 
-def calculate_frequency_score(quest: Quest) -> float:
+def calculate_frequency_score(schedulable_object) -> float:
     """
     Calculate frequency score for recurring tasks (0.0 - 1.0).
     Higher score = more frequent = higher priority.
     """
-    if not quest.recurrence_rule:
+    if not schedulable_object.recurrence_rule:
         return 0.0  # Not recurring
     
     # Parse recurrence rule to determine frequency
-    if "FREQ=DAILY" in quest.recurrence_rule:
+    if "FREQ=DAILY" in schedulable_object.recurrence_rule:
         return 1.0  # Daily tasks get highest frequency score
-    elif "FREQ=WEEKLY" in quest.recurrence_rule:
+    elif "FREQ=WEEKLY" in schedulable_object.recurrence_rule:
         return 0.8  # Weekly tasks get high frequency score
-    elif "FREQ=MONTHLY" in quest.recurrence_rule:
+    elif "FREQ=MONTHLY" in schedulable_object.recurrence_rule:
         return 0.6  # Monthly tasks get medium frequency score
-    elif "FREQ=YEARLY" in quest.recurrence_rule:
+    elif "FREQ=YEARLY" in schedulable_object.recurrence_rule:
         return 0.4  # Yearly tasks get low frequency score
     else:
         return 0.5  # Unknown frequency, default medium 

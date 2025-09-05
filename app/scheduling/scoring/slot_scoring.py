@@ -4,7 +4,7 @@ Main slot scoring aggregator that combines all domain-specific scoring functions
 
 from typing import List
 from ..core.time_slot import CleanTimeSlot
-from app.models import Quest
+
 from .time_scoring import calculate_time_preference_score, calculate_earlier_bonus, calculate_urgency_score
 from .priority_scoring import calculate_priority_score, calculate_task_selection_priority
 from .workload_scoring import (
@@ -17,32 +17,32 @@ from .workload_scoring import (
 from .difficulty_scoring import calculate_difficulty_workload_balance
 
 
-def calculate_slot_score(quest: Quest, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
+def calculate_slot_score(schedulable_object, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
     """
-    Calculate the overall score for a quest-slot combination.
+    Calculate the overall score for a schedulable_object-slot combination.
     This is the main scoring function that aggregates all domain-specific scores.
     """
     # Time preference score (0.0 - 100.0)
-    time_match = calculate_time_preference_score(quest, slot)
+    time_match = calculate_time_preference_score(schedulable_object, slot)
     
     # Priority score (0.3 - 1.5)
-    priority_score = calculate_priority_score(quest)
+    priority_score = calculate_priority_score(schedulable_object)
     
     # Earlier bonus (0.0 - 0.1)
-    earlier_bonus = calculate_earlier_bonus(quest, slot)
+    earlier_bonus = calculate_earlier_bonus(schedulable_object, slot)
     
     # Urgency score (0.0 - 10.0)
-    urgency_score = calculate_urgency_score(quest, slot)
+    urgency_score = calculate_urgency_score(schedulable_object, slot)
     
     # Workload scores
-    daily_workload = calculate_daily_workload_bonus(quest, slot, slots)
-    weekly_balance = calculate_weekly_balance_score(quest, slot, slots)
-    workload_density = calculate_workload_density_score(quest, slot, slots)
-    spacing = calculate_spacing_bonus(quest, slot, slots)
-    buffer_bonus = calculate_automatic_buffer_bonus(quest, slot, slots)
+    daily_workload = calculate_daily_workload_bonus(schedulable_object, slot, slots)
+    weekly_balance = calculate_weekly_balance_score(schedulable_object, slot, slots)
+    workload_density = calculate_workload_density_score(schedulable_object, slot, slots)
+    spacing = calculate_spacing_bonus(schedulable_object, slot, slots)
+    buffer_bonus = calculate_automatic_buffer_bonus(schedulable_object, slot, slots)
     
     # Difficulty balance score
-    difficulty_balance = calculate_difficulty_workload_balance(quest, slot, slots)
+    difficulty_balance = calculate_difficulty_workload_balance(schedulable_object, slot, slots)
     
     # Combine scores with weights
     # Time preference is most important (1000x weight)
@@ -63,9 +63,9 @@ def calculate_slot_score(quest: Quest, slot: CleanTimeSlot, slots: List[CleanTim
         (1.0 * earlier_bonus)        # Small bonus for early scheduling
     )
     
-    # Debug output for specific quests
-    if quest.title == "Gym Workout":
-        print(f"      🎯 SLOT SCORE: '{quest.title}' slot {slot.start.time()}-{slot.end.time()}")
+    # Debug output for specific schedulable_objects
+    if schedulable_object.title == "Gym Workout":
+        print(f"      🎯 SLOT SCORE: '{schedulable_object.title}' slot {slot.start.time()}-{slot.end.time()}")
         print(f"         📊 Time match: {time_match:.2f}")
         print(f"         📊 Priority: {priority_score:.2f}")
         print(f"         📊 Urgency: {urgency_score:.2f}")

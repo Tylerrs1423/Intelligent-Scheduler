@@ -450,8 +450,8 @@ class Event(Base):
     title: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String, default="")
     
-    start_time: Mapped[datetime] = mapped_column(nullable=False)
-    end_time: Mapped[datetime] = mapped_column(nullable=False)
+    start_time: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    end_time: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     
     scheduling_flexibility: Mapped[SchedulingFlexibility] = mapped_column(Enum(SchedulingFlexibility), default=SchedulingFlexibility.FIXED)
     is_auto_generated: Mapped[bool] = mapped_column(default=False)
@@ -475,6 +475,7 @@ class Event(Base):
     mood: Mapped[Optional[EventMood]] = mapped_column(Enum(EventMood), nullable=True)
     max_moves: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     moves_count: Mapped[int] = mapped_column(Integer, default=0)
+    preferred_time_of_day: Mapped[Optional[PreferredTimeOfDay]] = mapped_column(Enum(PreferredTimeOfDay), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)

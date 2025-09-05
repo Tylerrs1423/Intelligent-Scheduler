@@ -5,17 +5,17 @@ Difficulty-based scoring functions for slot evaluation.
 from datetime import date
 from typing import List
 from ..core.time_slot import CleanTimeSlot
-from app.models import Quest, TaskDifficulty
+from app.models import TaskDifficulty
 
 
-def calculate_difficulty_workload_balance(quest: Quest, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
+def calculate_difficulty_workload_balance(schedulable_object, slot: CleanTimeSlot, slots: List[CleanTimeSlot]) -> float:
     """
     Calculate difficulty-based workload balancing score.
     Penalizes clustering of difficult tasks on the same day.
     Higher score = better distribution of difficulty across the week.
     """
-    # Get the difficulty level of the current quest
-    quest_difficulty = get_quest_difficulty_score(quest)
+    # Get the difficulty level of the current schedulable_object
+    quest_difficulty = get_quest_difficulty_score(schedulable_object)
     
     # Get the target day for this slot
     target_date = slot.start.date()
@@ -44,7 +44,7 @@ def calculate_difficulty_workload_balance(quest: Quest, slot: CleanTimeSlot, slo
         return 0.1
 
 
-def get_quest_difficulty_score(quest: Quest) -> float:
+def get_quest_difficulty_score(schedulable_object) -> float:
     """
     Get difficulty score for a quest based on its difficulty level and duration.
     Higher score = more difficult.
@@ -52,22 +52,22 @@ def get_quest_difficulty_score(quest: Quest) -> float:
     # Base difficulty from TaskDifficulty enum
     base_difficulty = 0.5  # Default medium difficulty
     
-    if hasattr(quest, 'difficulty'):
-        if quest.difficulty == TaskDifficulty.EASY:
+    if hasattr(schedulable_object, 'difficulty'):
+        if schedulable_object.difficulty == TaskDifficulty.EASY:
             base_difficulty = 0.3
-        elif quest.difficulty == TaskDifficulty.MEDIUM:
+        elif schedulable_object.difficulty == TaskDifficulty.MEDIUM:
             base_difficulty = 0.6
-        elif quest.difficulty == TaskDifficulty.HARD:
+        elif schedulable_object.difficulty == TaskDifficulty.HARD:
             base_difficulty = 1.0
-        elif quest.difficulty == TaskDifficulty.VERY_HARD:
+        elif schedulable_object.difficulty == TaskDifficulty.VERY_HARD:
             base_difficulty = 1.5
     
     # Factor in duration (longer tasks are more mentally taxing)
-    duration_hours = quest.duration_minutes / 60.0
+    duration_hours = schedulable_object.duration_minutes / 60.0
     duration_factor = min(1.5, duration_hours / 2.0)  # Cap at 1.5x for very long tasks
     
     # Factor in priority (higher priority tasks are more stressful)
-    priority_factor = quest.priority / 5.0  # Normalize to 0-1 range
+    priority_factor = schedulable_object.priority / 5.0  # Normalize to 0-1 range
     
     # Calculate final difficulty score
     difficulty_score = base_difficulty * (1.0 + duration_factor * 0.3 + priority_factor * 0.2)

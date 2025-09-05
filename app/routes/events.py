@@ -154,7 +154,7 @@ async def create_event(
         mood=event_in.mood,
         max_moves=event_in.max_moves or 0,
         moves_count=0,
-        preferred_time_of_day=event_in.time_preference or PreferredTimeOfDay.NO_PREFERENCE
+        preferred_time_of_day=event_in.time_preference
     )
     
     # Try to schedule the event first

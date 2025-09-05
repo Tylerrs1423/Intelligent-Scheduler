@@ -5,10 +5,10 @@ Time-based scoring functions for slot evaluation.
 from datetime import datetime, time
 from typing import Optional
 from ..core.time_slot import CleanTimeSlot
-from app.models import Quest, SchedulingFlexibility, PreferredTimeOfDay
+from app.models import SchedulingFlexibility, PreferredTimeOfDay
 
 
-def calculate_time_preference_score(quest: Quest, slot: CleanTimeSlot) -> float:
+def calculate_time_preference_score(schedulable_object, slot: CleanTimeSlot) -> float:
     """
     Calculate score for time preferences with 3-tier scoring system:
     1. Expected window (highest score): exact expected_start to expected_end
@@ -26,10 +26,10 @@ def calculate_time_preference_score(quest: Quest, slot: CleanTimeSlot) -> float:
     slot_end_minutes = slot_end_time.hour * 60 + slot_end_time.minute
     
     # Handle FIXED flexibility with hard_start and hard_end constraints
-    if quest.scheduling_flexibility == SchedulingFlexibility.FIXED:
-        if quest.hard_start and quest.hard_end:
+    if schedulable_object.scheduling_flexibility == SchedulingFlexibility.FIXED:
+        if schedulable_object.hard_start and schedulable_object.hard_end:
             # Check if slot exactly matches the hard_start and hard_end times
-            if slot_start_time == quest.hard_start and slot_end_time == quest.hard_end:
+            if slot_start_time == schedulable_object.hard_start and slot_end_time == schedulable_object.hard_end:
                 return 1.0  # Perfect score for exact match
             else:
                 return 0.0  # Reject if not exact match
@@ -38,18 +38,18 @@ def calculate_time_preference_score(quest: Quest, slot: CleanTimeSlot) -> float:
     time_window_score = 0.0
     
     # Check if we have any time window constraints
-    has_time_constraints = (quest.expected_start or quest.expected_end or 
-                          quest.soft_start or quest.soft_end or 
-                          quest.hard_start or quest.hard_end)
+    has_time_constraints = (schedulable_object.expected_start or schedulable_object.expected_end or 
+                          schedulable_object.soft_start or schedulable_object.soft_end or 
+                          schedulable_object.hard_start or schedulable_object.hard_end)
     
     if has_time_constraints:
         # Convert constraint times to minutes
-        expected_start_minutes = (quest.expected_start.hour * 60 + quest.expected_start.minute) if quest.expected_start else None
-        expected_end_minutes = (quest.expected_end.hour * 60 + quest.expected_end.minute) if quest.expected_end else None
-        soft_start_minutes = (quest.soft_start.hour * 60 + quest.soft_start.minute) if quest.soft_start else None
-        soft_end_minutes = (quest.soft_end.hour * 60 + quest.soft_end.minute) if quest.soft_end else None
-        hard_start_minutes = (quest.hard_start.hour * 60 + quest.hard_start.minute) if quest.hard_start else None
-        hard_end_minutes = (quest.hard_end.hour * 60 + quest.hard_end.minute) if quest.hard_end else None
+        expected_start_minutes = (schedulable_object.expected_start.hour * 60 + schedulable_object.expected_start.minute) if schedulable_object.expected_start else None
+        expected_end_minutes = (schedulable_object.expected_end.hour * 60 + schedulable_object.expected_end.minute) if schedulable_object.expected_end else None
+        soft_start_minutes = (schedulable_object.soft_start.hour * 60 + schedulable_object.soft_start.minute) if schedulable_object.soft_start else None
+        soft_end_minutes = (schedulable_object.soft_end.hour * 60 + schedulable_object.soft_end.minute) if schedulable_object.soft_end else None
+        hard_start_minutes = (schedulable_object.hard_start.hour * 60 + schedulable_object.hard_start.minute) if schedulable_object.hard_start else None
+        hard_end_minutes = (schedulable_object.hard_end.hour * 60 + schedulable_object.hard_end.minute) if schedulable_object.hard_end else None
         
         # Check if slot is within hard window (must pass this)
         if hard_start_minutes is not None and slot_start_minutes < hard_start_minutes:
@@ -71,10 +71,10 @@ def calculate_time_preference_score(quest: Quest, slot: CleanTimeSlot) -> float:
             time_window_score = 0.0  # ❌ Reject - outside all windows
     
     # Handle WINDOW flexibility - must have time window constraints
-    if quest.scheduling_flexibility == SchedulingFlexibility.WINDOW:
+    if schedulable_object.scheduling_flexibility == SchedulingFlexibility.WINDOW:
         if not has_time_constraints:
             return 0.0  # WINDOW tasks must have time constraints
-        print(f"      🎯 TIME PREFERENCE: '{quest.title}' slot {slot.start.time()}-{slot.end.time()} = {time_window_score}")
+        print(f"      🎯 TIME PREFERENCE: '{schedulable_object.title}' slot {slot.start.time()}-{slot.end.time()} = {time_window_score}")
         print(f"         📊 DEBUG: expected={expected_start_minutes}-{expected_end_minutes}, soft={soft_start_minutes}-{soft_end_minutes}, hard={hard_start_minutes}-{hard_end_minutes}")
         print(f"         📊 DEBUG: slot_start={slot_start_minutes}, slot_end={slot_end_minutes}")
         return time_window_score  # Use the 3-tier score directly
@@ -82,27 +82,27 @@ def calculate_time_preference_score(quest: Quest, slot: CleanTimeSlot) -> float:
     # For other flexibility types, combine time window score with time of day preference
     time_of_day_score = 0.5  # Default neutral score
     
-    if quest.preferred_time_of_day and quest.preferred_time_of_day != PreferredTimeOfDay.NO_PREFERENCE:
+    if schedulable_object.preferred_time_of_day and schedulable_object.preferred_time_of_day != PreferredTimeOfDay.NO_PREFERENCE:
         slot_start_hour = slot.start.hour
         
         # Check if we should allow deviation from preferred time
-        allow_deviation = quest.allow_time_deviation or quest.scheduling_flexibility == SchedulingFlexibility.FLEXIBLE
+        allow_deviation = schedulable_object.allow_time_deviation or schedulable_object.scheduling_flexibility == SchedulingFlexibility.FLEXIBLE
         
-        if quest.preferred_time_of_day == PreferredTimeOfDay.MORNING:
+        if schedulable_object.preferred_time_of_day == PreferredTimeOfDay.MORNING:
             if 6 <= slot_start_hour < 12:
                 time_of_day_score = 1.0
             elif allow_deviation and (5 <= slot_start_hour < 14):
                 time_of_day_score = 0.7
             else:
                 time_of_day_score = 0.3
-        elif quest.preferred_time_of_day == PreferredTimeOfDay.AFTERNOON:
+        elif schedulable_object.preferred_time_of_day == PreferredTimeOfDay.AFTERNOON:
             if 12 <= slot_start_hour < 18:
                 time_of_day_score = 1.0
             elif allow_deviation and (10 <= slot_start_hour < 20):
                 time_of_day_score = 0.7
             else:
                 time_of_day_score = 0.3
-        elif quest.preferred_time_of_day == PreferredTimeOfDay.EVENING:
+        elif schedulable_object.preferred_time_of_day == PreferredTimeOfDay.EVENING:
             if 18 <= slot_start_hour < 23:
                 time_of_day_score = 1.0
             elif allow_deviation and (16 <= slot_start_hour < 24):
@@ -117,16 +117,16 @@ def calculate_time_preference_score(quest: Quest, slot: CleanTimeSlot) -> float:
         return time_of_day_score
 
 
-def calculate_earlier_bonus(quest: Quest, slot: CleanTimeSlot) -> float:
+def calculate_earlier_bonus(schedulable_object, slot: CleanTimeSlot) -> float:
     """
     Calculate bonus for scheduling tasks earlier in the day.
     Only applies to tasks with deadlines.
     """
-    if not quest.deadline:
+    if not schedulable_object.deadline:
         return 0.0  # No deadline, no early bonus
     
     # Calculate how many days until deadline
-    days_until_deadline = (quest.deadline.date() - slot.start.date()).days
+    days_until_deadline = (schedulable_object.deadline.date() - slot.start.date()).days
     
     if days_until_deadline <= 0:
         return 0.0  # Already at or past deadline
@@ -141,15 +141,15 @@ def calculate_earlier_bonus(quest: Quest, slot: CleanTimeSlot) -> float:
         return 0.0  # No bonus when deadline is close
 
 
-def calculate_urgency_score(quest: Quest, slot: CleanTimeSlot) -> float:
+def calculate_urgency_score(schedulable_object, slot: CleanTimeSlot) -> float:
     """
     Calculate urgency score based on deadline proximity.
     """
-    if not quest.deadline:
+    if not schedulable_object.deadline:
         return 0.0  # No deadline, no urgency
     
     # Calculate how many days until deadline
-    days_until_deadline = (quest.deadline.date() - slot.start.date()).days
+    days_until_deadline = (schedulable_object.deadline.date() - slot.start.date()).days
     
     if days_until_deadline <= 0:
         return 10.0  # High urgency - deadline passed or today

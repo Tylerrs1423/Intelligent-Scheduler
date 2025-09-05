@@ -35,26 +35,62 @@ export function useWeekEvents(weekStart: Date | null) {
     setError(null);
     
     try {
-      const startStr = toISODate(weekStart);
-      const endStr = toISODate(addDays(weekStart, 7));
+      const weekStartStr = toISODate(weekStart);
+      const weekEndStr = toISODate(addDays(weekStart, 7));
       
-      const response = await api.get('/events/date_range', { 
-        params: { start_date: startStr, end_date: endStr } 
-      });
+      // Try scheduler slots first, fall back to regular events
+      let mapped: WeekEvent[] = [];
       
-      const mapped: WeekEvent[] = (response.data || []).map((ev: any) => {
-        const s = new Date(ev.start_time);
-        const e = new Date(ev.end_time);
-        const toHM = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-        return {
-          id: String(ev.id ?? `${ev.title}-${ev.start_time}`),
-          date: toISODate(s),
-          label: ev.title || 'Event',
-          color: 'bg-sky-500',
-          start: toHM(s),
-          end: toHM(e),
-        } as WeekEvent;
-      });
+      try {
+        // Get scheduler slots
+        const response = await api.get('/events/scheduler-slots');
+        const slots = response.data?.slots || [];
+        
+        // Filter slots to current week and convert to WeekEvent format
+        mapped = slots
+          .filter((slot: any) => {
+            const slotDate = new Date(slot.start_time);
+            const slotDateStr = toISODate(slotDate);
+            return slotDateStr >= weekStartStr && slotDateStr < weekEndStr;
+          })
+          .filter((slot: any) => slot.status === 'occupied' && slot.occupant?.type === 'event')
+          .map((slot: any) => {
+            const s = new Date(slot.start_time);
+            const e = new Date(slot.end_time);
+            const toHM = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+            return {
+              id: String(slot.occupant?.id ?? `${slot.occupant?.title}-${slot.start_time}`),
+              date: toISODate(s),
+              label: slot.occupant?.title || 'Event',
+              color: 'bg-sky-500',
+              start: toHM(s),
+              end: toHM(e),
+            } as WeekEvent;
+          });
+      } catch (schedulerError) {
+        console.log('Scheduler slots not available, falling back to regular events');
+      }
+      
+      // If no scheduler events, fall back to regular events
+      if (mapped.length === 0) {
+        const response = await api.get('/events/date_range', { 
+          params: { start_date: weekStartStr, end_date: weekEndStr } 
+        });
+        
+        mapped = (response.data || []).map((ev: any) => {
+          const s = new Date(ev.start_time);
+          const e = new Date(ev.end_time);
+          const toHM = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+          return {
+            id: String(ev.id ?? `${ev.title}-${ev.start_time}`),
+            date: toISODate(s),
+            label: ev.title || 'Event',
+            color: 'bg-sky-500',
+            start: toHM(s),
+            end: toHM(e),
+          } as WeekEvent;
+        });
+      }
       
       setEvents(mapped);
     } catch (err: any) {

@@ -25,9 +25,27 @@ export function useSleepPreferences() {
     setError(null);
     
     try {
+      console.log('Fetching sleep preferences...');
       const response = await api.get('/users/user/sleep-preferences');
-      setSleepPreferences(response.data);
+      const data = response.data;
+      console.log('Sleep preferences response:', data);
+      
+      // Convert time format from "HH:MM:SS" to "HH:MM"
+      const formatTime = (timeStr: string) => {
+        if (!timeStr) return timeStr;
+        return timeStr.substring(0, 5); // Take only HH:MM part
+      };
+      
+      const formattedData = {
+        sleep_start: formatTime(data.sleep_start),
+        sleep_end: formatTime(data.sleep_end),
+        has_scheduler: data.has_scheduler || false
+      };
+      
+      console.log('Formatted sleep preferences:', formattedData);
+      setSleepPreferences(formattedData);
     } catch (err: any) {
+      console.error('Error fetching sleep preferences:', err);
       setError(err.message || 'Failed to fetch sleep preferences');
       setSleepPreferences(null);
     } finally {

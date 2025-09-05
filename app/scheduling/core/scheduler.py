@@ -97,10 +97,14 @@ class CleanScheduler:
 # ================================
 
     #load fixed events into the scheduler from database
-    def load_fixed_events(self, db: Session):
-        """Load fixed events into the scheduler."""
-        from app.models import Event, SchedulingFlexibility
-        events = db.query(Event).filter(Event.scheduling_flexibility == SchedulingFlexibility.FIXED).all()
+    def load_fixed_events(self, db: Session, user_id: int):
+        """Load fixed events into the scheduler for a specific user."""
+        from app.models import Event
+        from app.schemas import SchedulingFlexibility
+        events = db.query(Event).filter(
+            Event.scheduling_flexibility == SchedulingFlexibility.FIXED,
+            Event.user_id == user_id
+        ).all()
         for event in events:
             duration = event.end_time - event.start_time
             buffer_before = getattr(event, 'buffer_before', 0) or 0
@@ -120,49 +124,51 @@ class CleanScheduler:
 # CORE SCHEDULING LOGIC
 # ================================
 
-    def schedule_task_with_buffers(self, quest: Quest, duration: timedelta, exact_start_time: datetime = None, exact_end_time: datetime = None) -> List[CleanTimeSlot]:
+    def schedule_task_with_buffers(self, schedulable_object, duration: timedelta, exact_start_time: datetime = None, exact_end_time: datetime = None) -> List[CleanTimeSlot]:
         """
         Main coordinator method for scheduling tasks with buffers.
         Delegates to specialized helper methods based on scheduling type.
         """
         # Get buffer configuration
-        buffer_before, buffer_after = self._get_buffer_configuration(quest)
+        buffer_before, buffer_after = self._get_buffer_configuration(schedulable_object)
         
         # Determine scheduling strategy and get optimal slot
         if exact_start_time:
             optimal_candidate, containing_slot = self._handle_exact_time_scheduling(
-                quest, duration, exact_start_time, exact_end_time, buffer_before, buffer_after
+                schedulable_object, duration, exact_start_time, exact_end_time, buffer_before, buffer_after
             )
             if not optimal_candidate:
                 return []
+            available_slot = None  # Not used for exact time scheduling
         else:
             optimal_candidate, available_slot = self._handle_flexible_scheduling(
-                quest, duration, buffer_before, buffer_after
+                schedulable_object, duration, buffer_before, buffer_after
             )
             if not optimal_candidate:
                 return []
+            containing_slot = None  # Not used for flexible scheduling
         
         # Schedule the task and update scheduler
-        new_slots = self._schedule_in_slot(quest, duration, optimal_candidate, buffer_before, buffer_after)
+        new_slots = self._schedule_in_slot(schedulable_object, duration, optimal_candidate, buffer_before, buffer_after)
         self._update_scheduler_slots(optimal_candidate, new_slots, exact_start_time, containing_slot, available_slot)
         
         return new_slots
 
-    def schedule_task_at_exact_time(self, quest: Quest, exact_start_time: datetime, duration: timedelta, exact_end_time: datetime = None) -> List[CleanTimeSlot]:
+    def schedule_task_at_exact_time(self, schedulable_object, exact_start_time: datetime, duration: timedelta, exact_end_time: datetime = None) -> List[CleanTimeSlot]:
         """Schedule a task at an exact time (optionally specifying an exact end time)."""
-        return self.schedule_task_with_buffers(quest, duration, exact_start_time, exact_end_time)
+        return self.schedule_task_with_buffers(schedulable_object, duration, exact_start_time, exact_end_time)
 
 # ================================
 # SCHEDULING HELPER METHODS
 # ================================
 
-    def _get_buffer_configuration(self, quest: Quest) -> tuple[int, int]:
-        """Extract buffer configuration from quest."""
-        buffer_before = getattr(quest, 'buffer_before', 0) or 0
-        buffer_after = getattr(quest, 'buffer_after', 0) or 0
+    def _get_buffer_configuration(self, schedulable_object) -> tuple[int, int]:
+        """Extract buffer configuration from schedulable object."""
+        buffer_before = getattr(schedulable_object, 'buffer_before', 0) or 0
+        buffer_after = getattr(schedulable_object, 'buffer_after', 0) or 0
         return buffer_before, buffer_after
 
-    def _handle_exact_time_scheduling(self, quest: Quest, duration: timedelta, exact_start_time: datetime, 
+    def _handle_exact_time_scheduling(self, schedulable_object, duration: timedelta, exact_start_time: datetime, 
                                     exact_end_time: datetime, buffer_before: int, buffer_after: int) -> tuple[Optional[CleanTimeSlot], Optional[CleanTimeSlot]]:
         """Handle exact time scheduling logic."""
         # Adjust duration if exact end time provided
@@ -184,14 +190,14 @@ class CleanScheduler:
         optimal_candidate = CleanTimeSlot(buffer_before_start, buffer_after_end, AVAILABLE)
         return optimal_candidate, containing_slot
 
-    def _handle_flexible_scheduling(self, quest: Quest, duration: timedelta, buffer_before: int, buffer_after: int) -> tuple[Optional[CleanTimeSlot], Optional[CleanTimeSlot]]:
+    def _handle_flexible_scheduling(self, schedulable_object, duration: timedelta, buffer_before: int, buffer_after: int) -> tuple[Optional[CleanTimeSlot], Optional[CleanTimeSlot]]:
         """Handle flexible scheduling logic."""
         total_duration = duration + timedelta(minutes=buffer_before + buffer_after)
         
         # Find optimal slot
-        optimal_candidate = self._find_optimal_slot(quest, total_duration)
+        optimal_candidate = self._find_optimal_slot(schedulable_object, total_duration)
         if not optimal_candidate:
-            optimal_candidate = self._try_displacement_scheduling(quest, total_duration)
+            optimal_candidate = self._try_displacement_scheduling(schedulable_object, total_duration)
             if not optimal_candidate:
                 return None, None
         
@@ -211,10 +217,10 @@ class CleanScheduler:
                 return slot
         return None
 
-    def _try_displacement_scheduling(self, quest: Quest, total_duration: timedelta) -> Optional[CleanTimeSlot]:
+    def _try_displacement_scheduling(self, schedulable_object, total_duration: timedelta) -> Optional[CleanTimeSlot]:
         """Try to displace lower priority tasks to make room."""
         return displace_lower_priority_tasks(
-            quest, total_duration, self.slots,
+            schedulable_object, total_duration, self.slots,
             self._find_optimal_slot, merge_adjacent_available_slots,
             self.schedule_task_with_buffers
         )
@@ -252,7 +258,7 @@ class CleanScheduler:
 # SLOT FINDING & OPTIMIZATION
 # ================================
 
-    def _find_optimal_slot(self, quest: Quest, total_duration: timedelta) -> Optional[CleanTimeSlot]:
+    def _find_optimal_slot(self, schedulable_object, total_duration: timedelta) -> Optional[CleanTimeSlot]:
         """
         Find the optimal time slot for a quest using the weighted scoring formula.
         Now tests candidate positions within large available slots.
@@ -275,7 +281,7 @@ class CleanScheduler:
         # Generate candidate slots for each available slot
         all_candidates = []
         for available_slot in available_slots:
-            candidates = self._generate_candidate_slots(available_slot, quest, total_duration)
+            candidates = self._generate_candidate_slots(available_slot, schedulable_object, total_duration)
             all_candidates.extend(candidates)
         
         if not all_candidates:
@@ -284,7 +290,7 @@ class CleanScheduler:
         # Check each candidate slot with strict rules
         allowed_candidates = []
         for candidate in all_candidates:
-            if is_slot_allowed(quest, candidate, self.slots):
+            if is_slot_allowed(schedulable_object, candidate, self.slots):
                 allowed_candidates.append(candidate)
         
         if not allowed_candidates:
@@ -293,19 +299,19 @@ class CleanScheduler:
         # Score each allowed candidate slot using the weighted formula
         scored_candidates = []
         for candidate in allowed_candidates:
-            score = calculate_slot_score(quest, candidate, self.slots)
+            score = calculate_slot_score(schedulable_object, candidate, self.slots)
             scored_candidates.append((score, candidate))
-            if "Gym Workout" in quest.title:
+            if hasattr(schedulable_object, 'title') and "Gym Workout" in schedulable_object.title:
                 print(f"      🏅 Candidate slot: {candidate.start.strftime('%H:%M')} - {candidate.end.strftime('%H:%M')}, score={score}")
         
         # Sort by score (highest first) and return the best candidate
         scored_candidates.sort(key=lambda x: x[0], reverse=True)
-        if scored_candidates and "Gym Workout" in quest.title:
+        if scored_candidates and hasattr(schedulable_object, 'title') and "Gym Workout" in schedulable_object.title:
             best = scored_candidates[0][1]
             print(f"      🥇 PICKED slot: {best.start.strftime('%H:%M')} - {best.end.strftime('%H:%M')}, score={scored_candidates[0][0]}")
         return scored_candidates[0][1]
 
-    def _generate_candidate_slots(self, available_slot: CleanTimeSlot, quest: Quest, total_duration: timedelta, interval_minutes: int = 5) -> List[CleanTimeSlot]:
+    def _generate_candidate_slots(self, available_slot: CleanTimeSlot, schedulable_object, total_duration: timedelta, interval_minutes: int = 5) -> List[CleanTimeSlot]:
         """
         Generate candidate slots at fixed intervals within a large available time block.
         This allows testing different start times within the same available period.
@@ -339,11 +345,11 @@ class CleanScheduler:
 # TASK SCHEDULING & BUFFERING
 # ================================
 
-    def _schedule_in_slot(self, quest: Quest, duration: timedelta, slot: CleanTimeSlot, buffer_before: int, buffer_after: int) -> List[CleanTimeSlot]:
+    def _schedule_in_slot(self, schedulable_object, duration: timedelta, slot: CleanTimeSlot, buffer_before: int, buffer_after: int) -> List[CleanTimeSlot]:
         """Schedule a task in a specific slot with buffers."""
-        return self._schedule_regular_task(quest, duration, slot, buffer_before, buffer_after)
+        return self._schedule_regular_task(schedulable_object, duration, slot, buffer_before, buffer_after)
 
-    def _schedule_regular_task(self, quest: Quest, duration: timedelta, slot: CleanTimeSlot, buffer_before: int, buffer_after: int) -> List[CleanTimeSlot]:
+    def _schedule_regular_task(self, schedulable_object, duration: timedelta, slot: CleanTimeSlot, buffer_before: int, buffer_after: int) -> List[CleanTimeSlot]:
         """Schedule a regular task with buffers."""
         new_slots = []
         
@@ -357,7 +363,7 @@ class CleanScheduler:
         # Create task slot
         task_start = slot.start + timedelta(minutes=buffer_before)
         task_end = task_start + duration
-        task_slot = CleanTimeSlot(task_start, task_end, quest)
+        task_slot = CleanTimeSlot(task_start, task_end, schedulable_object)
         new_slots.append(task_slot)
         
         # Create buffer after (if any)
@@ -368,10 +374,10 @@ class CleanScheduler:
             new_slots.append(buffer_slot)
         
         # Track this event's slots
-        if hasattr(quest, 'id') and quest.id:
-            if quest.id not in self.event_slots:
-                self.event_slots[quest.id] = []
-            self.event_slots[quest.id].extend(new_slots)
+        if hasattr(schedulable_object, 'id') and schedulable_object.id:
+            if schedulable_object.id not in self.event_slots:
+                self.event_slots[schedulable_object.id] = []
+            self.event_slots[schedulable_object.id].extend(new_slots)
         
         return new_slots
 

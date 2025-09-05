@@ -41,6 +41,43 @@ async def list_events(
 ):
     return db.query(Event).filter(Event.user_id == current_user.id).order_by(Event.start_time.asc()).all()
 
+@router.get("/scheduler-slots")
+async def get_scheduler_slots(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get scheduler slots for the frontend to display timeslots."""
+    
+    slots = scheduler_service.get_scheduler_slots(current_user.id, db)
+    if not slots:
+        return {"slots": [], "message": "No scheduler available. Please set sleep preferences first."}
+    
+    # Convert slots to frontend-friendly format
+    formatted_slots = []
+    for slot in slots:
+        if slot.occupant in ["AVAILABLE", "RESERVED", "BUFFER"]:
+            formatted_slots.append({
+                "start_time": slot.start.isoformat(),
+                "end_time": slot.end.isoformat(),
+                "occupant": slot.occupant,
+                "status": "available" if slot.occupant == "AVAILABLE" else "occupied"
+            })
+        else:
+            # This is an event object
+            formatted_slots.append({
+                "start_time": slot.start.isoformat(),
+                "end_time": slot.end.isoformat(),
+                "occupant": {
+                    "type": "event",
+                    "title": getattr(slot.occupant, 'title', 'Event'),
+                    "id": getattr(slot.occupant, 'id', None),
+                    "priority": getattr(slot.occupant, 'priority', 0)
+                },
+                "status": "occupied"
+            })
+    
+    return {"slots": formatted_slots}
+
 @router.get("/{event_id}")
 async def get_event(
     event_id: int,
@@ -49,81 +86,69 @@ async def get_event(
 ):
     return db.query(Event).filter(Event.id == event_id, Event.user_id == current_user.id).first()
 
+# Import scheduler service at module level to keep it in memory
+from ..services.scheduler_service import scheduler_service
+
 @router.post("/create")
 async def create_event(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     event_in: EventCreate = Body(...),
 ):
-    # Create scheduler instance covering a reasonable window around the event
-    window_start = min(event_in.start_time, datetime.utcnow()) - timedelta(days=7)
-    window_end = max(event_in.end_time, event_in.start_time) + timedelta(days=30)
-    scheduler = CleanScheduler(window_start=window_start, window_end=window_end)
     
-    # Load existing fixed events into scheduler timeline
-    scheduler.load_fixed_events(db)
-    
-    # Create a Quest-like object for the scheduler
-    from app.models import Quest, QuestStatus, QuestCategory, QuestType, QuestDifficulty
-    quest = Quest(
-        title=event_in.title,
-        description=event_in.description,
-        status=QuestStatus.PENDING,
-        category=QuestCategory.WORK,  # Default category
-        quest_type=QuestType.SINGLE,
-        difficulty=QuestDifficulty.MEDIUM,  # Default difficulty
-        priority=event_in.priority,
-        buffer_before=event_in.buffer_before,
-        buffer_after=event_in.buffer_after,
-        user_id=current_user.id
-    )
-    
-    # Let the scheduler handle ALL scheduling logic
-    from app.models import SchedulingFlexibility
-    if event_in.scheduling_flexibility == SchedulingFlexibility.FIXED:
-        # For fixed events, try to schedule at exact time
-        duration = event_in.end_time - event_in.start_time
-        scheduled_slots = scheduler.schedule_task_at_exact_time(
-            quest, event_in.start_time, duration, event_in.end_time
+    # Get scheduler for user
+    scheduler = scheduler_service.get_or_create_scheduler(current_user.id, db)
+    if not scheduler:
+        raise HTTPException(
+            status_code=400, 
+            detail="User must set sleep preferences before creating events"
         )
-        
-        if not scheduled_slots:
-            raise HTTPException(
-                status_code=409, 
-                detail="Cannot schedule event at requested time - conflicts with existing events"
-            )
-    else:
-        # For flexible events, let scheduler find optimal time
-        duration = event_in.end_time - event_in.start_time
-        scheduled_slots = scheduler.schedule_task_with_buffers(quest, duration)
-        
-        if not scheduled_slots:
-            raise HTTPException(
-                status_code=409, 
-                detail="Cannot find available time slot for this event"
-            )
     
-    # Get the actual scheduled times from the scheduler
-    task_slot = next((slot for slot in scheduled_slots if slot.occupant == quest), None)
-    if not task_slot:
-        raise HTTPException(status_code=500, detail="Scheduler failed to create task slot")
-    
-    # Create the event with the scheduler-determined times
-    new_event = Event(
+    # Create temporary event object for scheduling test
+    temp_event = Event(
         user_id=current_user.id,
         title=event_in.title,
         description=event_in.description,
-        start_time=task_slot.start,
-        end_time=task_slot.end,
+        start_time=event_in.start_time,
+        end_time=event_in.end_time,
         scheduling_flexibility=event_in.scheduling_flexibility,
         priority=event_in.priority,
-        buffer_before=event_in.buffer_before,
-        buffer_after=event_in.buffer_after,
+        buffer_before=event_in.buffer_before or 0,
+        buffer_after=event_in.buffer_after or 0,
+        is_auto_generated=False,
+        source=None,
+        source_id=None,
+        earliest_start=None,
+        latest_end=None,
+        allowed_days=None,
+        soft_start=None,
+        soft_end=None,
+        hard_start=None,
+        hard_end=None,
+        min_duration=None,
+        max_duration=None,
+        recurrence_rule=None,
+        depends_on_event_id=None,
+        depends_on_quest_id=None,
+        mood=None,
+        max_moves=0,
+        moves_count=0
     )
-
-    db.add(new_event)
+    
+    # Try to schedule the event first
+    success = scheduler_service.add_event_to_scheduler(current_user.id, temp_event, db)
+    if not success:
+        raise HTTPException(
+            status_code=409, 
+            detail="Cannot schedule event - conflicts with existing events or sleep time"
+        )
+    
+    # If scheduling succeeded, save to database
+    db.add(temp_event)
     db.commit()
-    db.refresh(new_event)
+    db.refresh(temp_event)
+    
+    new_event = temp_event
 
     return new_event
 

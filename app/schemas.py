@@ -402,29 +402,21 @@ class ThemeTagListOut(BaseModel):
 class EventCreate(BaseModel):
     title: str
     description: str = ""
-    start_time: datetime
-    end_time: datetime
+    start_time: Optional[datetime] = None  # Required for FIXED, not allowed for FLEXIBLE
+    end_time: Optional[datetime] = None    # Required for FIXED, not allowed for FLEXIBLE
     scheduling_flexibility: SchedulingFlexibility = SchedulingFlexibility.FIXED
     buffer_before: Optional[int] = None
     buffer_after: Optional[int] = None
     priority: PriorityLevel = PriorityLevel.MEDIUM
-    # is_auto_generated: bool = False
-    # source: Optional[SourceType] = None
-    # source_id: Optional[int] = None
-    # earliest_start: Optional[datetime] = None
-    # latest_end: Optional[datetime] = None
-    # allowed_days: Optional[list[int]] = None
-    # soft_start: Optional[time] = None
-    # soft_end: Optional[time] = None
-    # hard_start: Optional[time] = None
-    # hard_end: Optional[time] = None
-    # min_duration: Optional[int] = None
-    # max_duration: Optional[int] = None
-    # recurrence_rule: Optional[str] = None
-    # depends_on_event_id: Optional[int] = None
-    # depends_on_quest_id: Optional[int] = None
-    # mood: Optional[EventMood] = None
-    # max_moves: Optional[int] = None
+    # Flexible event fields
+    duration: Optional[int] = None  # Required for FLEXIBLE (in minutes)
+    time_preference: Optional[PreferredTimeOfDay] = None  # Morning, Afternoon, Evening
+    # Other fields
+    recurrence_rule: Optional[str] = None
+    depends_on_event_id: Optional[int] = None
+    depends_on_quest_id: Optional[int] = None
+    mood: Optional[EventMood] = None
+    max_moves: Optional[int] = None
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None

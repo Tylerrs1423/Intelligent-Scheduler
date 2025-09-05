@@ -88,6 +88,7 @@ async def get_event(
 
 # Import scheduler service at module level to keep it in memory
 from ..services.scheduler_service import scheduler_service
+from ..models import PreferredTimeOfDay, SchedulingFlexibility
 
 @router.post("/create")
 async def create_event(
@@ -96,6 +97,25 @@ async def create_event(
     event_in: EventCreate = Body(...),
 ):
     
+    # Validate flexible event requirements
+    if event_in.scheduling_flexibility == SchedulingFlexibility.FLEXIBLE:
+        if event_in.start_time or event_in.end_time:
+            raise HTTPException(
+                status_code=400,
+                detail="Flexible events cannot have start_time or end_time"
+            )
+        if not event_in.duration:
+            raise HTTPException(
+                status_code=400,
+                detail="Flexible events must have a duration"
+            )
+    else:  # FIXED event
+        if not event_in.start_time or not event_in.end_time:
+            raise HTTPException(
+                status_code=400,
+                detail="Fixed events must have start_time and end_time"
+            )
+    
     # Get scheduler for user
     scheduler = scheduler_service.get_or_create_scheduler(current_user.id, db)
     if not scheduler:
@@ -103,6 +123,7 @@ async def create_event(
             status_code=400, 
             detail="User must set sleep preferences before creating events"
         )
+    
     
     # Create temporary event object for scheduling test
     temp_event = Event(
@@ -121,18 +142,19 @@ async def create_event(
         earliest_start=None,
         latest_end=None,
         allowed_days=None,
-        soft_start=None,
-        soft_end=None,
+        soft_start=None,  # Will be set by scheduler based on time_preference
+        soft_end=None,    # Will be set by scheduler based on time_preference
         hard_start=None,
         hard_end=None,
-        min_duration=None,
+        min_duration=event_in.duration,  # Use duration for flexible events
         max_duration=None,
-        recurrence_rule=None,
-        depends_on_event_id=None,
-        depends_on_quest_id=None,
-        mood=None,
-        max_moves=0,
-        moves_count=0
+        recurrence_rule=event_in.recurrence_rule,
+        depends_on_event_id=event_in.depends_on_event_id,
+        depends_on_quest_id=event_in.depends_on_quest_id,
+        mood=event_in.mood,
+        max_moves=event_in.max_moves or 0,
+        moves_count=0,
+        preferred_time_of_day=event_in.time_preference or PreferredTimeOfDay.NO_PREFERENCE
     )
     
     # Try to schedule the event first

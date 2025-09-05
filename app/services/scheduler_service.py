@@ -69,10 +69,11 @@ class SchedulerService:
             user_sleep_end=sleep_end
         )
         
-        # Note: We don't load existing events here to avoid conflicts
-        # Events will be added individually via add_event_to_scheduler
+        # Load existing events using the scheduler's built-in method
+        scheduler.load_fixed_events(db, user_id)
         
         self.user_schedulers[user_id] = scheduler
+    
     
     def update_sleep_preferences(self, user_id: int, sleep_start: time, sleep_end: time, db: Session):
         """Update user sleep preferences and recreate scheduler."""
@@ -187,6 +188,16 @@ class SchedulerService:
         """Remove user's scheduler from memory."""
         if user_id in self.user_schedulers:
             del self.user_schedulers[user_id]
+    
+    def refresh_scheduler(self, user_id: int, db: Session):
+        """Refresh scheduler by recreating it and loading existing events."""
+        print(f"🔍 REFRESH DEBUG: Refreshing scheduler for user {user_id}")
+        if user_id in self.user_schedulers:
+            del self.user_schedulers[user_id]
+        
+        # Recreate scheduler
+        scheduler = self.get_or_create_scheduler(user_id, db)
+        return scheduler
     
 
 # Global scheduler service instance

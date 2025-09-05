@@ -273,8 +273,10 @@ export default function HomePage() {
     description: '',
     start_time: '',
     end_time: '',
+    duration: 60, // Duration in minutes for flexible events
+    time_preference: 'morning', // morning, afternoon, evening
     priority: 2, // 1=LOW, 2=MEDIUM, 3=HIGH, 4=URGENT
-    scheduling_flexibility: 'flexible', // lowercase: fixed, strict, flexible, window, window_unstrict
+    scheduling_flexibility: 'fixed', // fixed or flexible
     buffer_before: 0,
     buffer_after: 0
   });
@@ -466,12 +468,18 @@ export default function HomePage() {
       const eventData = {
         title: newEvent.title,
         description: newEvent.description,
-        start_time: newEvent.start_time,
-        end_time: newEvent.end_time,
         priority: newEvent.priority,
         scheduling_flexibility: newEvent.scheduling_flexibility,
         buffer_before: newEvent.buffer_before,
-        buffer_after: newEvent.buffer_after
+        buffer_after: newEvent.buffer_after,
+        // Include fields based on scheduling flexibility
+        ...(newEvent.scheduling_flexibility === 'fixed' ? {
+          start_time: newEvent.start_time,
+          end_time: newEvent.end_time
+        } : {
+          duration: newEvent.duration,
+          time_preference: newEvent.time_preference
+        })
       };
 
       await api.post('/events/create', eventData);
@@ -482,8 +490,10 @@ export default function HomePage() {
         description: '',
         start_time: '',
         end_time: '',
+        duration: 60,
+        time_preference: 'morning',
         priority: 2, // 1=LOW, 2=MEDIUM, 3=HIGH, 4=URGENT
-        scheduling_flexibility: 'flexible', // lowercase: fixed, strict, flexible, window, window_unstrict
+        scheduling_flexibility: 'fixed',
         buffer_before: 0,
         buffer_after: 0
       });
@@ -624,28 +634,57 @@ export default function HomePage() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
-                      <input
-                        type="datetime-local"
-                        value={newEvent.start_time}
-                        onChange={(e) => setNewEvent({...newEvent, start_time: e.target.value})}
-                        required
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:border-blue-500"
-                      />
+                  {/* Show different fields based on scheduling flexibility */}
+                  {newEvent.scheduling_flexibility === 'fixed' ? (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
+                        <input
+                          type="datetime-local"
+                          value={newEvent.start_time}
+                          onChange={(e) => setNewEvent({...newEvent, start_time: e.target.value})}
+                          required
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">End Time</label>
+                        <input
+                          type="datetime-local"
+                          value={newEvent.end_time}
+                          onChange={(e) => setNewEvent({...newEvent, end_time: e.target.value})}
+                          required
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">End Time</label>
-                      <input
-                        type="datetime-local"
-                        value={newEvent.end_time}
-                        onChange={(e) => setNewEvent({...newEvent, end_time: e.target.value})}
-                        required
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:border-blue-500"
-                      />
+                  ) : (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Duration (minutes)</label>
+                        <input
+                          type="number"
+                          value={newEvent.duration}
+                          onChange={(e) => setNewEvent({...newEvent, duration: parseInt(e.target.value) || 60})}
+                          required
+                          min="1"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Time Preference</label>
+                        <select
+                          value={newEvent.time_preference}
+                          onChange={(e) => setNewEvent({...newEvent, time_preference: e.target.value})}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:border-blue-500"
+                        >
+                          <option value="morning">Morning (6 AM - 12 PM)</option>
+                          <option value="afternoon">Afternoon (12 PM - 6 PM)</option>
+                          <option value="evening">Evening (6 PM - 10 PM)</option>
+                        </select>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
@@ -662,17 +701,14 @@ export default function HomePage() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Scheduling Flexibility</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Scheduling Type</label>
                     <select
                       value={newEvent.scheduling_flexibility}
                       onChange={(e) => setNewEvent({...newEvent, scheduling_flexibility: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:border-blue-500"
                     >
                       <option value="fixed">Fixed (exact time)</option>
-                      <option value="strict">Strict (same day only)</option>
-                      <option value="flexible">Flexible (any time)</option>
-                      <option value="window">Window (preferred time)</option>
-                      <option value="window_unstrict">Window Unstrict (any day, preferred time)</option>
+                      <option value="flexible">Flexible (scheduler finds best time)</option>
                     </select>
                   </div>
 

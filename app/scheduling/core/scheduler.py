@@ -7,15 +7,11 @@ from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
 from .time_slot import CleanTimeSlot, AVAILABLE, RESERVED
 from ..scoring.slot_scoring import calculate_slot_score
-from ..algorithms.displacement import displace_lower_priority_tasks
 
-from ..constraints.time_constraints import is_slot_allowed, is_same_day_recurring_allowed
+from ..constraints.time_constraints import is_slot_allowed
 from ..utils.slot_utils import (
-    merge_adjacent_available_slots, get_available_slots, replace_slot,
-    move_event_slots, get_sleep_info, format_scheduler_repr,
-    find_slot_by_event_id, remove_event_slots
+    move_event_slots, remove_event_slots
 )
-from app.models import Quest
 
 # ================================
 # INITIALIZATION & SETUP
@@ -134,29 +130,26 @@ class CleanScheduler:
         
         # Determine scheduling strategy and get optimal slot
         if exact_start_time:
-            optimal_candidate, containing_slot = self._handle_exact_time_scheduling(
+            optimal_candidate, original_slot = self._handle_exact_time_scheduling(
                 schedulable_object, duration, exact_start_time, exact_end_time, buffer_before, buffer_after
             )
             if not optimal_candidate:
                 return []
-            available_slot = None  # Not used for exact time scheduling
         else:
-            optimal_candidate, available_slot = self._handle_flexible_scheduling(
+            optimal_candidate, original_slot = self._handle_flexible_scheduling(
                 schedulable_object, duration, buffer_before, buffer_after
             )
             if not optimal_candidate:
                 return []
-            containing_slot = None  # Not used for flexible scheduling
         
         # Schedule the task and update scheduler
         new_slots = self._schedule_in_slot(schedulable_object, duration, optimal_candidate, buffer_before, buffer_after)
-        self._update_scheduler_slots(optimal_candidate, new_slots, exact_start_time, containing_slot, available_slot)
+        
+        # Update scheduler slots - both flexible and fixed events preserve fragments
+        self._update_slots_with_fragments(original_slot, optimal_candidate, new_slots)
         
         return new_slots
 
-    def schedule_task_at_exact_time(self, schedulable_object, exact_start_time: datetime, duration: timedelta, exact_end_time: datetime = None) -> List[CleanTimeSlot]:
-        """Schedule a task at an exact time (optionally specifying an exact end time)."""
-        return self.schedule_task_with_buffers(schedulable_object, duration, exact_start_time, exact_end_time)
 
 # ================================
 # SCHEDULING HELPER METHODS
@@ -171,24 +164,26 @@ class CleanScheduler:
     def _handle_exact_time_scheduling(self, schedulable_object, duration: timedelta, exact_start_time: datetime, 
                                     exact_end_time: datetime, buffer_before: int, buffer_after: int) -> tuple[Optional[CleanTimeSlot], Optional[CleanTimeSlot]]:
         """Handle exact time scheduling logic."""
-        # Adjust duration if exact end time provided
-        if exact_end_time and exact_end_time > exact_start_time:
-            duration = exact_end_time - exact_start_time
-        
         # Calculate buffer-inclusive time window
         buffer_before_start = exact_start_time - timedelta(minutes=buffer_before)
         task_start = exact_start_time
-        task_end = task_start + duration
+        
+        # Use exact end time directly if provided, otherwise calculate from duration
+        if exact_end_time and exact_end_time > exact_start_time:
+            task_end = exact_end_time
+        else:
+            task_end = task_start + duration
+        
         buffer_after_end = task_end + timedelta(minutes=buffer_after)
         
         # Find containing slot
-        containing_slot = self._find_containing_available_slot(buffer_before_start, buffer_after_end)
-        if not containing_slot:
+        original_slot = self._find_containing_available_slot(buffer_before_start, buffer_after_end)
+        if not original_slot:
             return None, None
         
         # Create optimal candidate
         optimal_candidate = CleanTimeSlot(buffer_before_start, buffer_after_end, AVAILABLE)
-        return optimal_candidate, containing_slot
+        return optimal_candidate, original_slot
 
     def _handle_flexible_scheduling(self, schedulable_object, duration: timedelta, buffer_before: int, buffer_after: int) -> tuple[Optional[CleanTimeSlot], Optional[CleanTimeSlot]]:
         """Handle flexible scheduling logic."""
@@ -197,16 +192,14 @@ class CleanScheduler:
         # Find optimal slot
         optimal_candidate = self._find_optimal_slot(schedulable_object, total_duration)
         if not optimal_candidate:
-            optimal_candidate = self._try_displacement_scheduling(schedulable_object, total_duration)
-            if not optimal_candidate:
-                return None, None
-        
-        # Find containing available slot
-        available_slot = self._find_containing_available_slot(optimal_candidate.start, optimal_candidate.end)
-        if not available_slot:
             return None, None
         
-        return optimal_candidate, available_slot
+        # Find containing available slot
+        original_slot = self._find_containing_available_slot(optimal_candidate.start, optimal_candidate.end)
+        if not original_slot:
+            return None, None
+        
+        return optimal_candidate, original_slot
 
     def _find_containing_available_slot(self, start_time: datetime, end_time: datetime) -> Optional[CleanTimeSlot]:
         """Find an available slot that contains the given time range."""
@@ -217,42 +210,27 @@ class CleanScheduler:
                 return slot
         return None
 
-    def _try_displacement_scheduling(self, schedulable_object, total_duration: timedelta) -> Optional[CleanTimeSlot]:
-        """Try to displace lower priority tasks to make room."""
-        return displace_lower_priority_tasks(
-            schedulable_object, total_duration, self.slots,
-            self._find_optimal_slot, merge_adjacent_available_slots,
-            self.schedule_task_with_buffers
-        )
 
-    def _update_scheduler_slots(self, optimal_candidate: CleanTimeSlot, new_slots: List[CleanTimeSlot], 
-                               exact_start_time: bool, containing_slot: Optional[CleanTimeSlot], 
-                               available_slot: Optional[CleanTimeSlot]):
-        """Update scheduler slots after scheduling."""
-        if exact_start_time:
-            self._update_slots_for_exact_time(containing_slot, optimal_candidate, new_slots)
-        else:
-            replace_slot(available_slot, new_slots, self.slots)
 
-    def _update_slots_for_exact_time(self, containing_slot: CleanTimeSlot, optimal_candidate: CleanTimeSlot, 
+    def _update_slots_with_fragments(self, original_slot: CleanTimeSlot, optimal_candidate: CleanTimeSlot, 
                                     new_slots: List[CleanTimeSlot]):
-        """Update slots for exact time scheduling, preserving available fragments."""
+        """Update slots preserving available fragments for both exact and flexible scheduling."""
         full_replacement: List[CleanTimeSlot] = []
         
         # Preceding available fragment
-        if containing_slot.start < optimal_candidate.start:
-            pre_fragment = CleanTimeSlot(containing_slot.start, optimal_candidate.start, AVAILABLE)
+        if original_slot.start < optimal_candidate.start:
+            pre_fragment = CleanTimeSlot(original_slot.start, optimal_candidate.start, AVAILABLE)
             full_replacement.append(pre_fragment)
         
         # Scheduled slots (buffers/task)
         full_replacement.extend(new_slots)
         
         # Trailing available fragment
-        if optimal_candidate.end < containing_slot.end:
-            post_fragment = CleanTimeSlot(optimal_candidate.end, containing_slot.end, AVAILABLE)
+        if optimal_candidate.end < original_slot.end:
+            post_fragment = CleanTimeSlot(optimal_candidate.end, original_slot.end, AVAILABLE)
             full_replacement.append(post_fragment)
         
-        replace_slot(containing_slot, full_replacement, self.slots)
+        self.replace_slot(original_slot, full_replacement, self.slots)
 
 # ================================
 # SLOT FINDING & OPTIMIZATION
@@ -271,9 +249,6 @@ class CleanScheduler:
                 slot.occupant != RESERVED and
                 slot.duration() >= total_duration):
                     available_slots.append(slot)
-            elif slot.occupant not in (AVAILABLE, RESERVED):
-                occupant_name = getattr(slot.occupant, 'title', str(slot.occupant))
-                print(f"      ⛔ Slot {slot.start.strftime('%Y-%m-%d %H:%M')} - {slot.end.strftime('%H:%M')} is occupied by '{occupant_name}' (priority: {getattr(slot.occupant, 'priority', '?')})")
         
         if not available_slots:
             return None
@@ -301,14 +276,9 @@ class CleanScheduler:
         for candidate in allowed_candidates:
             score = calculate_slot_score(schedulable_object, candidate, self.slots)
             scored_candidates.append((score, candidate))
-            if hasattr(schedulable_object, 'title') and "Gym Workout" in schedulable_object.title:
-                print(f"      🏅 Candidate slot: {candidate.start.strftime('%H:%M')} - {candidate.end.strftime('%H:%M')}, score={score}")
         
         # Sort by score (highest first) and return the best candidate
         scored_candidates.sort(key=lambda x: x[0], reverse=True)
-        if scored_candidates and hasattr(schedulable_object, 'title') and "Gym Workout" in schedulable_object.title:
-            best = scored_candidates[0][1]
-            print(f"      🥇 PICKED slot: {best.start.strftime('%H:%M')} - {best.end.strftime('%H:%M')}, score={scored_candidates[0][0]}")
         return scored_candidates[0][1]
 
     def _generate_candidate_slots(self, available_slot: CleanTimeSlot, schedulable_object, total_duration: timedelta, interval_minutes: int = 5) -> List[CleanTimeSlot]:
@@ -347,10 +317,6 @@ class CleanScheduler:
 
     def _schedule_in_slot(self, schedulable_object, duration: timedelta, slot: CleanTimeSlot, buffer_before: int, buffer_after: int) -> List[CleanTimeSlot]:
         """Schedule a task in a specific slot with buffers."""
-        return self._schedule_regular_task(schedulable_object, duration, slot, buffer_before, buffer_after)
-
-    def _schedule_regular_task(self, schedulable_object, duration: timedelta, slot: CleanTimeSlot, buffer_before: int, buffer_after: int) -> List[CleanTimeSlot]:
-        """Schedule a regular task with buffers."""
         new_slots = []
         
         # Create buffer before (if any)
@@ -384,12 +350,99 @@ class CleanScheduler:
 
 
 # ================================
+# SLOT MANAGEMENT UTILITIES
+# ================================
+
+    def replace_slot(self, old_slot: CleanTimeSlot, new_slots: List[CleanTimeSlot], slots: List[CleanTimeSlot]):
+        """Replace an old slot with new slots in the slots list"""
+        try:
+            index = slots.index(old_slot)
+            # Remove the old slot
+            slots.pop(index)
+            # Insert new slots at the same position
+            for i, new_slot in enumerate(new_slots):
+                slots.insert(index + i, new_slot)
+            # Sort to maintain chronological order
+            slots.sort()
+        except ValueError:
+            # Old slot not found, just append new slots
+            slots.extend(new_slots)
+            slots.sort()
+
+    def merge_adjacent_available_slots(self, slots: List[CleanTimeSlot]):
+        """Merge adjacent available slots to keep the scheduler clean"""
+        i = 0
+        while i < len(slots) - 1:
+            current = slots[i]
+            next_slot = slots[i + 1]
+            
+            if (current.occupant == AVAILABLE and 
+                next_slot.occupant == AVAILABLE and
+                current.end == next_slot.start and
+                current.end.date() == next_slot.start.date()):  # Only merge if they're actually adjacent in time AND on the same day
+                
+                # Merge the slots
+                merged_slot = CleanTimeSlot(
+                    current.start,
+                    next_slot.end
+                )
+                
+                # Replace both slots with merged slot
+                slots[i] = merged_slot
+                slots.pop(i + 1)
+            else:
+                i += 1
+
+    def get_available_slots(self, slots: List[CleanTimeSlot], min_duration: timedelta) -> List[CleanTimeSlot]:
+        """Get all available slots that can fit the minimum duration"""
+        available = []
+        for slot in slots:
+            if (slot.occupant == AVAILABLE and 
+                slot.duration() >= min_duration):
+                available.append(slot)
+        return available
+
+    def get_sleep_info(self, sleep_start, sleep_end, slots: List[CleanTimeSlot]) -> dict:
+        """Get information about sleep blocking"""
+        if not sleep_start or not sleep_end:
+            return {
+                "sleep_blocking_enabled": False,
+                "message": "No sleep time configured"
+            }
+        
+        if sleep_start > sleep_end:
+            sleep_type = "crosses_midnight"
+            sleep_duration = "overnight"
+        else:
+            sleep_type = "same_day"
+            sleep_duration = "daytime"
+        
+        return {
+            "sleep_blocking_enabled": True,
+            "sleep_start": sleep_start.strftime("%I:%M %p"),
+            "sleep_end": sleep_end.strftime("%I:%M %p"),
+            "sleep_type": sleep_type,
+            "sleep_duration": sleep_duration,
+            "available_slots": len(slots)
+        }
+
+    def format_scheduler_repr(self, slots: List[CleanTimeSlot], sleep_start=None, sleep_end=None) -> str:
+        """Format scheduler representation string"""
+        sleep_info = self.get_sleep_info(sleep_start, sleep_end, slots)
+        if sleep_info["sleep_blocking_enabled"]:
+            return f"CleanScheduler({len(slots)} slots, sleep: {sleep_info['sleep_start']}-{sleep_info['sleep_end']})"
+        else:
+            return f"CleanScheduler({len(slots)} slots, no sleep blocking)"
+
+# ================================
 # EVENT MANAGEMENT & TRACKING
 # ================================
 
     def remove_event(self, event_id: int):
         """Remove an event and all its associated slots."""
         remove_event_slots(event_id, self.slots)
+        # Merge adjacent available slots after removal
+        self.merge_adjacent_available_slots(self.slots)
         if event_id in self.event_slots:
             del self.event_slots[event_id]
 
@@ -405,13 +458,7 @@ class CleanScheduler:
 # UTILITY & QUERY METHODS
 # ================================
 
-    def get_available_slots(self, min_duration: timedelta) -> List[CleanTimeSlot]:
-        """Get all available slots that can fit the minimum duration."""
-        return get_available_slots(self.slots, min_duration)
 
-    def get_sleep_info(self) -> dict:
-        """Get information about sleep blocking."""
-        return get_sleep_info(self.sleep_start, self.sleep_end, self.slots)
 
     def __repr__(self):
-        return format_scheduler_repr(self.slots, self.sleep_start, self.sleep_end) 
+        return self.format_scheduler_repr(self.slots, self.sleep_start, self.sleep_end) 

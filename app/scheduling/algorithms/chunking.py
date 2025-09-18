@@ -5,23 +5,22 @@ Chunking algorithms for breaking large tasks into manageable pieces.
 from datetime import datetime, timedelta
 from typing import List, Optional
 from ..core.time_slot import CleanTimeSlot, AVAILABLE
-from app.models import Quest
 
 
-def should_chunk_task(quest: Quest, duration: timedelta, slots: List[CleanTimeSlot]) -> bool:
+def should_chunk_task(schedulable_object, duration: timedelta, slots: List[CleanTimeSlot]) -> bool:
     """
     Determine if a task should be chunked based on its duration, deadline, and available slots.
     """
     # Don't chunk if task is already chunked
-    if getattr(quest, 'is_chunked', False):
+    if getattr(schedulable_object, 'is_chunked', False):
         return False
     
     # Don't chunk if chunking is explicitly disabled
-    if not getattr(quest, 'allow_chunking', True):
+    if not getattr(schedulable_object, 'allow_chunking', True):
         return False
     
     # Check if task has a specific chunk preference that should force chunking
-    chunk_preference = getattr(quest, 'chunk_preference', None)
+    chunk_preference = getattr(schedulable_object, 'chunk_preference', None)
     if chunk_preference and chunk_preference in ['deadline_aware', 'front_loaded', 'user_preference']:
         return True
     
@@ -34,7 +33,7 @@ def should_chunk_task(quest: Quest, duration: timedelta, slots: List[CleanTimeSl
         return True
     
     # For tasks 2-4 hours, check if they can fit in available slots
-    total_duration = duration + timedelta(minutes=getattr(quest, 'buffer_before', 0) + getattr(quest, 'buffer_after', 0))
+    total_duration = duration + timedelta(minutes=getattr(schedulable_object, 'buffer_before', 0) + getattr(schedulable_object, 'buffer_after', 0))
     
     for slot in slots:
         if (slot.occupant == AVAILABLE and 
@@ -45,7 +44,7 @@ def should_chunk_task(quest: Quest, duration: timedelta, slots: List[CleanTimeSl
     return True
 
 
-def schedule_chunked_task(quest: Quest, duration: timedelta, slots: List[CleanTimeSlot], 
+def schedule_chunked_task(schedulable_object, duration: timedelta, slots: List[CleanTimeSlot], 
                          window_start: datetime, calculate_chunk_strategy_func, schedule_chunk_func,
                          exact_start_time: datetime = None) -> List[CleanTimeSlot]:
     """
@@ -53,30 +52,30 @@ def schedule_chunked_task(quest: Quest, duration: timedelta, slots: List[CleanTi
     Supports multiple chunking strategies and pomodoro intervals.
     """
     # Calculate chunking strategy
-    chunk_strategy = calculate_chunk_strategy_func(quest, duration, window_start)
+    chunk_strategy = calculate_chunk_strategy_func(schedulable_object, duration, window_start)
     chunk_count = chunk_strategy['chunk_count']
     chunk_minutes = chunk_strategy['chunk_minutes']
     remaining_minutes = chunk_strategy['remaining_minutes']
     strategy = chunk_strategy['strategy']
     days_available = chunk_strategy.get('days_available', 1)
     
-    # Store strategy in quest for chunk creation
-    quest.chunk_strategy = chunk_strategy
+    # Store strategy in schedulable_object for chunk creation
+    schedulable_object.chunk_strategy = chunk_strategy
     
     scheduled_slots = []
     
     # Handle different chunking strategies
     if strategy == 'front_loaded' and 'chunk_sizes' in chunk_strategy:
         # Front-loaded strategy with variable chunk sizes
-        scheduled_slots = schedule_front_loaded_chunks(quest, chunk_strategy, slots, window_start, schedule_chunk_func)
+        scheduled_slots = schedule_front_loaded_chunks(schedulable_object, chunk_strategy, slots, window_start, schedule_chunk_func)
     else:
         # Standard chunking with day distribution
-        scheduled_slots = schedule_standard_chunks(quest, chunk_strategy, slots, window_start, schedule_chunk_func)
+        scheduled_slots = schedule_standard_chunks(schedulable_object, chunk_strategy, slots, window_start, schedule_chunk_func)
     
     return scheduled_slots
 
 
-def schedule_standard_chunks(quest: Quest, chunk_strategy: dict, slots: List[CleanTimeSlot], 
+def schedule_standard_chunks(schedulable_object, chunk_strategy: dict, slots: List[CleanTimeSlot], 
                            window_start: datetime, schedule_chunk_func) -> List[CleanTimeSlot]:
     """Schedule standard chunks with day distribution."""
     chunk_count = chunk_strategy['chunk_count']
@@ -85,7 +84,7 @@ def schedule_standard_chunks(quest: Quest, chunk_strategy: dict, slots: List[Cle
     days_available = chunk_strategy.get('days_available', 1)
     
     # Calculate target days for each chunk (distribute evenly)
-    target_days = calculate_chunk_distribution_days(quest, chunk_count, days_available, window_start)
+    target_days = calculate_chunk_distribution_days(schedulable_object, chunk_count, days_available, window_start)
     
     scheduled_slots = []
     failed_chunks = []
@@ -98,14 +97,14 @@ def schedule_standard_chunks(quest: Quest, chunk_strategy: dict, slots: List[Cle
         else:
             chunk_duration = timedelta(minutes=chunk_minutes)
         
-        # Create chunk quest with numbering
-        chunk_quest = create_chunk_quest(quest, chunk_index + 1, chunk_count, chunk_duration)
+        # Create chunk schedulable_object with numbering
+        chunk_schedulable_object = create_chunk_schedulable_object(schedulable_object, chunk_index + 1, chunk_count, chunk_duration)
         
         # Get target day for this chunk
         target_day = target_days[chunk_index]
         
         # Try to schedule this chunk on the target day
-        chunk_slots = schedule_chunk_func(chunk_quest, chunk_duration, target_day, slots)
+        chunk_slots = schedule_chunk_func(chunk_schedulable_object, chunk_duration, target_day, slots)
         
         if chunk_slots:
             scheduled_slots.extend(chunk_slots)
@@ -116,29 +115,29 @@ def schedule_standard_chunks(quest: Quest, chunk_strategy: dict, slots: List[Cle
     
     # If any chunks failed, log the conflict
     if failed_chunks:
-        print(f"⚠️ CHUNK SCHEDULING CONFLICTS: {quest.title}")
+        print(f"⚠️ CHUNK SCHEDULING CONFLICTS: {schedulable_object.title}")
         print(f"   Failed chunks: {failed_chunks}")
     
     return scheduled_slots
 
 
-def schedule_front_loaded_chunks(quest: Quest, chunk_strategy: dict, slots: List[CleanTimeSlot],
+def schedule_front_loaded_chunks(schedulable_object, chunk_strategy: dict, slots: List[CleanTimeSlot],
                                window_start: datetime, schedule_chunk_func) -> List[CleanTimeSlot]:
     """Schedule front-loaded chunks with variable sizes."""
     chunk_sizes = chunk_strategy['chunk_sizes']
     days_available = chunk_strategy.get('days_available', 1)
     
     # Calculate target days (larger chunks get earlier days)
-    target_days = calculate_chunk_distribution_days(quest, len(chunk_sizes), days_available, window_start)
+    target_days = calculate_chunk_distribution_days(schedulable_object, len(chunk_sizes), days_available, window_start)
     
     scheduled_slots = []
     
     for chunk_index, chunk_size in enumerate(chunk_sizes):
         chunk_duration = timedelta(minutes=chunk_size)
-        chunk_quest = create_chunk_quest(quest, chunk_index + 1, len(chunk_sizes), chunk_duration)
+        chunk_schedulable_object = create_chunk_schedulable_object(schedulable_object, chunk_index + 1, len(chunk_sizes), chunk_duration)
         
         target_day = target_days[chunk_index]
-        chunk_slots = schedule_chunk_func(chunk_quest, chunk_duration, target_day, slots)
+        chunk_slots = schedule_chunk_func(chunk_schedulable_object, chunk_duration, target_day, slots)
         
         if chunk_slots:
             scheduled_slots.extend(chunk_slots)
@@ -149,7 +148,7 @@ def schedule_front_loaded_chunks(quest: Quest, chunk_strategy: dict, slots: List
     return scheduled_slots
 
 
-def calculate_chunk_distribution_days(quest: Quest, chunk_count: int, days_available: int, window_start: datetime) -> List[datetime]:
+def calculate_chunk_distribution_days(schedulable_object, chunk_count: int, days_available: int, window_start: datetime) -> List[datetime]:
     """Calculate target days for chunk distribution."""
     # Use scheduler window start instead of today
     window_start_date = window_start.date()
@@ -164,7 +163,7 @@ def calculate_chunk_distribution_days(quest: Quest, chunk_count: int, days_avail
     return target_days
 
 
-def calculate_chunk_strategy(quest: Quest, duration: timedelta, window_start: datetime) -> dict:
+def calculate_chunk_strategy(schedulable_object, duration: timedelta, window_start: datetime) -> dict:
     """
     Study-focused chunking strategy that considers deadline constraints and user preferences.
     Supports multiple strategies: fixed-size, deadline-aware, front-loaded, pomodoro-style, and adaptive fallback.
@@ -172,14 +171,14 @@ def calculate_chunk_strategy(quest: Quest, duration: timedelta, window_start: da
     total_minutes = int(duration.total_seconds() / 60)
     
     # Get user preferences and task properties
-    chunk_preference = getattr(quest, 'chunk_preference', 'adaptive')
-    deadline = quest.deadline
+    chunk_preference = getattr(schedulable_object, 'chunk_preference', 'adaptive')
+    deadline = schedulable_object.deadline
     
-    print(f"🔍 STUDY CHUNKING: {quest.title} - {total_minutes} minutes")
+    print(f"🔍 STUDY CHUNKING: {schedulable_object.title} - {total_minutes} minutes")
     print(f"   ⚙️ Chunk preference: {chunk_preference}")
     
     # Calculate available days until deadline
-    days_available = calculate_days_until_deadline(quest, window_start) if deadline else 1
+    days_available = calculate_days_until_deadline(schedulable_object, window_start) if deadline else 1
     
     # Select and apply chunking strategy
     if chunk_preference == 'fixed_size':
@@ -189,20 +188,20 @@ def calculate_chunk_strategy(quest: Quest, duration: timedelta, window_start: da
     elif chunk_preference == 'front_loaded':
         strategy_result = calculate_front_loaded_chunks(total_minutes, days_available)
     elif chunk_preference == 'user_preference':
-        strategy_result = calculate_user_preference_chunks(total_minutes, days_available, quest)
+        strategy_result = calculate_user_preference_chunks(total_minutes, days_available, schedulable_object)
     else:  # adaptive fallback
-        strategy_result = calculate_adaptive_chunks(total_minutes, days_available, quest)
+        strategy_result = calculate_adaptive_chunks(total_minutes, days_available, schedulable_object)
     
     return strategy_result
 
 
-def calculate_days_until_deadline(quest: Quest, window_start: datetime) -> int:
+def calculate_days_until_deadline(schedulable_object, window_start: datetime) -> int:
     """Calculate available days until deadline."""
-    if not quest.deadline:
+    if not schedulable_object.deadline:
         return 1
     
     window_start_date = window_start.date()
-    deadline_date = quest.deadline.date()
+    deadline_date = schedulable_object.deadline.date()
     days_until = (deadline_date - window_start_date).days
     
     # Ensure at least 1 day, cap at 30 days for reasonable chunking
@@ -289,9 +288,9 @@ def calculate_front_loaded_chunks(total_minutes: int, days_available: int) -> di
     }
 
 
-def calculate_user_preference_chunks(total_minutes: int, days_available: int, quest: Quest) -> dict:
+def calculate_user_preference_chunks(total_minutes: int, days_available: int, schedulable_object) -> dict:
     """User preference-based chunking."""
-    preference = getattr(quest, 'chunk_size_preference', 'medium')
+    preference = getattr(schedulable_object, 'chunk_size_preference', 'medium')
     
     if preference == 'large':
         chunk_minutes = 240  # 4 hours
@@ -305,7 +304,7 @@ def calculate_user_preference_chunks(total_minutes: int, days_available: int, qu
     # Check if chunks fit in available days
     if chunk_minutes * days_available < total_minutes:
         # Fall back to adaptive sizing
-        return calculate_adaptive_chunks(total_minutes, days_available, quest)
+        return calculate_adaptive_chunks(total_minutes, days_available, schedulable_object)
     
     chunk_count = (total_minutes + chunk_minutes - 1) // chunk_minutes
     remaining_minutes = total_minutes % chunk_minutes
@@ -321,7 +320,7 @@ def calculate_user_preference_chunks(total_minutes: int, days_available: int, qu
     }
 
 
-def calculate_adaptive_chunks(total_minutes: int, days_available: int, quest: Quest) -> dict:
+def calculate_adaptive_chunks(total_minutes: int, days_available: int, schedulable_object) -> dict:
     """Adaptive fallback: automatically adjust chunk size based on constraints."""
     # Start with ideal chunk size
     ideal_chunk_minutes = total_minutes / days_available
@@ -358,65 +357,65 @@ def calculate_adaptive_chunks(total_minutes: int, days_available: int, quest: Qu
     }
 
 
-def create_chunk_quest(original_quest: Quest, chunk_index: int, chunk_count: int, chunk_duration: timedelta) -> Quest:
+def create_chunk_schedulable_object(original_schedulable_object, chunk_index: int, chunk_count: int, chunk_duration: timedelta):
     """
-    Create a chunk quest from the original quest with proper parent-child relationship.
+    Create a chunk schedulable_object from the original schedulable_object with proper parent-child relationship.
     Enhanced for study sessions with pomodoro structure.
     """
     # Determine the title based on chunking strategy
-    chunk_strategy = getattr(original_quest, 'chunk_strategy', {})
+    chunk_strategy = getattr(original_schedulable_object, 'chunk_strategy', {})
     strategy = chunk_strategy.get('strategy', 'unknown')
     
     if chunk_count > 1:
         # Strategy-based labeling
         if strategy == 'deadline_aware':
-            title = f"{original_quest.title} (Study Session {chunk_index}/{chunk_count})"
+            title = f"{original_schedulable_object.title} (Study Session {chunk_index}/{chunk_count})"
         elif strategy == 'pomodoro_style':
-            title = f"{original_quest.title} (Pomodoro {chunk_index}/{chunk_count})"
+            title = f"{original_schedulable_object.title} (Pomodoro {chunk_index}/{chunk_count})"
         elif strategy == 'front_loaded':
-            title = f"{original_quest.title} (Session {chunk_index}/{chunk_count})"
+            title = f"{original_schedulable_object.title} (Session {chunk_index}/{chunk_count})"
         else:
-            title = f"{original_quest.title} (Part {chunk_index}/{chunk_count})"
+            title = f"{original_schedulable_object.title} (Part {chunk_index}/{chunk_count})"
     else:
-        title = f"{original_quest.title} (Chunk)"
+        title = f"{original_schedulable_object.title} (Chunk)"
     
-    # Create a copy of the original quest with chunk-specific modifications
-    chunk_quest = Quest(
+    # Create a copy of the original schedulable_object with chunk-specific modifications
+    chunk_schedulable_object = type(original_schedulable_object)(
         title=title,
-        description=original_quest.description,
-        priority=original_quest.priority,
+        description=original_schedulable_object.description,
+        priority=original_schedulable_object.priority,
         duration_minutes=int(chunk_duration.total_seconds() / 60),  # Use chunk-specific duration
-        preferred_time_of_day=original_quest.preferred_time_of_day,
-        scheduling_flexibility=original_quest.scheduling_flexibility,
-        deadline=original_quest.deadline,
-        buffer_before=original_quest.buffer_before,
-        buffer_after=original_quest.buffer_after,
-        owner_id=original_quest.owner_id,
+        preferred_time_of_day=original_schedulable_object.preferred_time_of_day,
+        scheduling_flexibility=original_schedulable_object.scheduling_flexibility,
+        deadline=original_schedulable_object.deadline,
+        buffer_before=original_schedulable_object.buffer_before,
+        buffer_after=original_schedulable_object.buffer_after,
+        owner_id=original_schedulable_object.owner_id,
         
         # Chunking-specific fields
         is_chunked=(strategy != 'pomodoro_style'),  # Pomodoro chunks are not marked as chunked
         chunk_index=chunk_index if chunk_index > 0 else None,
         chunk_count=chunk_count if chunk_count > 0 else None,
-        base_title=original_quest.title,  # Store original title
+        base_title=original_schedulable_object.title,  # Store original title
         allow_chunking=False,  # Chunks cannot be further chunked
-        parent_quest_id=original_quest.id if hasattr(original_quest, 'id') and original_quest.id else None,  # Link to parent quest
+        parent_schedulable_object_id=original_schedulable_object.id if hasattr(original_schedulable_object, 'id') and original_schedulable_object.id else None,  # Link to parent schedulable_object
         chunk_duration_minutes=int(chunk_duration.total_seconds() / 60),  # Store chunk duration
         
         # Study-specific fields
         chunk_strategy=chunk_strategy,
         
         # Copy other relevant fields
-        soft_start=original_quest.soft_start,
-        soft_end=original_quest.soft_end,
-        hard_start=original_quest.hard_start,
-        hard_end=original_quest.hard_end,
-        allow_time_deviation=original_quest.allow_time_deviation,
-        allow_urgent_override=original_quest.allow_urgent_override,
-        allow_same_day_recurring=original_quest.allow_same_day_recurring
+        soft_start=original_schedulable_object.soft_start,
+        soft_end=original_schedulable_object.soft_end,
+        hard_start=original_schedulable_object.hard_start,
+        hard_end=original_schedulable_object.hard_end,
+        allow_time_deviation=original_schedulable_object.allow_time_deviation,
+        allow_urgent_override=original_schedulable_object.allow_urgent_override,
+        allow_same_day_recurring=original_schedulable_object.allow_same_day_recurring
     )
     
-    # For in-memory quests without IDs, store the original title as a reference
-    if not hasattr(original_quest, 'id') or not original_quest.id:
-        chunk_quest.parent_quest_title = original_quest.title
+    # For in-memory schedulable_objects without IDs, store the original title as a reference
+    if not hasattr(original_schedulable_object, 'id') or not original_schedulable_object.id:
+        chunk_schedulable_object.parent_schedulable_object_title = original_schedulable_object.title
     
-    return chunk_quest 
+    return chunk_schedulable_object 

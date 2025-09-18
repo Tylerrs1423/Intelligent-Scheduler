@@ -53,13 +53,11 @@ class SchedulerService:
     
     def _create_scheduler_for_user(self, user_id: int, sleep_start: time, sleep_end: time, db: Session):
         """Create scheduler for user with sleep preferences."""
-        # Create scheduler with 14-day window from start of current week
+        # Create scheduler with 14-day window from today onwards
         now = datetime.utcnow()
-        # Start from beginning of current week (Sunday)
-        days_since_sunday = now.weekday() + 1  # Monday=0, so Sunday=6, add 1 to get days since Sunday
-        window_start = now - timedelta(days=days_since_sunday)
-        window_start = window_start.replace(hour=0, minute=0, second=0, microsecond=0)
-        # End 14 days from start of week
+        # Start from today (not beginning of week)
+        window_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # End 14 days from today
         window_end = window_start + timedelta(days=14)
         
         scheduler = CleanScheduler(
@@ -135,8 +133,14 @@ class SchedulerService:
                 self.expected_end = None
                 self.soft_start = event.soft_start
                 self.soft_end = event.soft_end
-                self.hard_start = event.hard_start
-                self.hard_end = event.hard_end
+                
+                # For fixed events, set hard_start and hard_end to the actual times
+                if event.scheduling_flexibility == SchedulingFlexibility.FIXED:
+                    self.hard_start = event.start_time.time() if event.start_time else None
+                    self.hard_end = event.end_time.time() if event.end_time else None
+                else:
+                    self.hard_start = event.hard_start
+                    self.hard_end = event.hard_end
                 self.allowed_days = event.allowed_days
                 self.min_duration = event.min_duration
                 self.max_duration = event.max_duration
@@ -162,8 +166,8 @@ class SchedulerService:
         if event.scheduling_flexibility == SchedulingFlexibility.FIXED:
             # For fixed events, try to schedule at exact time
             print(f"🔍 SCHEDULING DEBUG: Using fixed scheduling")
-            scheduled_slots = scheduler.schedule_task_at_exact_time(
-                scheduling_obj, event.start_time, duration, event.end_time
+            scheduled_slots = scheduler.schedule_task_with_buffers(
+                scheduling_obj, duration, event.start_time, event.end_time
             )
         else:
             # For flexible events, let scheduler find optimal time
@@ -184,13 +188,32 @@ class SchedulerService:
     
     def get_scheduler_slots(self, user_id: int, db: Session) -> Optional[list]:
         """Get all slots from user's scheduler."""
-        scheduler = self.get_scheduler(user_id)
+        scheduler = self.get_or_create_scheduler(user_id, db)
         if not scheduler:
-            # Try to create one if it doesn't exist
-            scheduler = self.get_or_create_scheduler(user_id, db)
-            if not scheduler:
-                return None
+            return None
+        
+        # Rebuild scheduler with all events from database to ensure consistency
+        self._rebuild_scheduler_with_events(user_id, db)
+        
         return scheduler.slots
+    
+    def _rebuild_scheduler_with_events(self, user_id: int, db: Session):
+        """Rebuild scheduler with all events from database."""
+        if user_id not in self.user_schedulers:
+            return
+        
+        scheduler = self.user_schedulers[user_id]
+        
+        # Clear existing events from scheduler
+        scheduler.slots = scheduler._create_slots_excluding_sleep()
+        scheduler.event_slots = {}
+        
+        # Get all events for this user from database
+        events = db.query(Event).filter(Event.user_id == user_id).all()
+        
+        # Add each event to the scheduler
+        for event in events:
+            self.add_event_to_scheduler(user_id, event, db)
     
     def remove_scheduler(self, user_id: int):
         """Remove user's scheduler from memory."""

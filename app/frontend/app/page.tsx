@@ -288,9 +288,9 @@ export default function HomePage() {
   // Get current week start for events
   const [weekStart, setWeekStart] = useState<Date | null>(null);
   
-  // Set week start on client side
+  // Set week start on client side - start from today onwards
   useEffect(() => {
-    setWeekStart(startOfWeekSunday(new Date()));
+    setWeekStart(new Date()); // Start from today instead of beginning of week
   }, []);
 
   // Use the custom hook for events
@@ -515,6 +515,32 @@ export default function HomePage() {
     }
   };
 
+  const handleDeleteAllEvents = async () => {
+    if (!window.confirm('Are you sure you want to delete ALL events? This action cannot be undone.')) {
+      return;
+    }
+
+    setIsLoading(true);
+    setError('');
+
+    try {
+      await api.delete('/events/delete-all');
+      
+      // Refresh the calendar to show the updated events
+      refreshEvents();
+      
+    } catch (error: any) {
+      if (error.response?.data?.detail) {
+        const errorDetail = error.response.data.detail;
+        setError(typeof errorDetail === 'string' ? errorDetail : JSON.stringify(errorDetail));
+      } else {
+        setError('Failed to delete events. Please try again.');
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Calendar page after successful login
   if (isLoggedIn) {
     return (
@@ -559,6 +585,12 @@ export default function HomePage() {
               className="bg-green-500 text-white py-3 px-6 rounded-lg text-lg font-medium hover:bg-green-600 transition-colors"
             >
               🛏️ Sleep Preferences
+            </button>
+            <button 
+              onClick={handleDeleteAllEvents}
+              className="bg-red-500 text-white py-3 px-6 rounded-lg text-lg font-medium hover:bg-red-600 transition-colors"
+            >
+              🗑️ Delete All Events
             </button>
           </div>
 

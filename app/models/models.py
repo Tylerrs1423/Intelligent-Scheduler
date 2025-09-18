@@ -6,7 +6,7 @@ from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from sqlalchemy.ext.mutable import MutableList
 from datetime import datetime, timedelta
 from typing import Optional, List
-from .database import Base
+from ..database import Base
 import enum
 from pydantic import BaseModel
 

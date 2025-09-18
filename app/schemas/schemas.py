@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field, EmailStr
 from datetime import datetime, time
 from typing import Optional, List, Tuple
-from .models import UserRole, QuestStatus, QuestCategory, QuestGeneration, QuestType, QuestDifficulty, GoalStatus, PriorityLevel, MeasurementType, TaskType, UserIntensityProfile, SourceType, EventMood, PreferredTimeOfDay, TaskDifficulty, SchedulingFlexibility
+from ..models import UserRole, QuestStatus, QuestCategory, QuestGeneration, QuestType, QuestDifficulty, GoalStatus, PriorityLevel, MeasurementType, TaskType, UserIntensityProfile, SourceType, EventMood, PreferredTimeOfDay, TaskDifficulty, SchedulingFlexibility
 
 # ----------------- User Schemas ---------------------
 

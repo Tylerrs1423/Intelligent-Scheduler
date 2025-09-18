@@ -10,7 +10,7 @@ from ..models import Event, User
 from ..schemas import EventOut, EventCreate, EventUpdate
 from ..auth import get_current_user
 from ..scheduling import CleanScheduler, CleanTimeSlot, AVAILABLE, RESERVED
-from ..scheduling.utils.slot_utils import replace_slot
+t from ..services.scheduler_service import SchedulerService
 
 router = APIRouter(tags=["events"])
 
@@ -219,3 +219,28 @@ async def delete_event(
     db.commit()
     
     return {"success": True, "message": "Event deleted"}
+
+@router.delete("/delete-all")
+async def delete_all_events(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete all events for the current user."""
+    # Get all events for the current user
+    events = db.query(Event).filter(Event.user_id == current_user.id).all()
+    
+    # Delete all events from database
+    for event in events:
+        db.delete(event)
+    
+    db.commit()
+    
+    # Also clear the scheduler for this user
+    scheduler_service = SchedulerService()
+    scheduler = scheduler_service.get_or_create_scheduler(current_user.id, db)
+    if scheduler:
+        # Clear all event slots from the scheduler
+        scheduler.slots = scheduler._create_slots_excluding_sleep()
+        scheduler.event_slots = {}
+    
+    return {"success": True, "message": f"Deleted {len(events)} events and cleared scheduler"}

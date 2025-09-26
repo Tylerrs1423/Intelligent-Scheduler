@@ -53,16 +53,20 @@ export function useWeekEvents(weekStart: Date | null) {
             const slotDateStr = toISODate(slotDate);
             return slotDateStr >= weekStartStr && slotDateStr < weekEndStr;
           })
-          .filter((slot: any) => slot.status === 'occupied' && slot.occupant?.type === 'event')
+          .filter((slot: any) => slot.status === 'occupied')
           .map((slot: any) => {
             const s = new Date(slot.start_time);
             const e = new Date(slot.end_time);
             const toHM = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+            
+            // Determine if this is a buffer slot or event slot
+            const isBuffer = slot.occupant === 'BUFFER';
+            
             return {
-              id: String(slot.occupant?.id ?? `${slot.occupant?.title}-${slot.start_time}`),
+              id: String(slot.occupant?.id ?? `${slot.occupant}-${slot.start_time}`),
               date: toISODate(s),
-              label: slot.occupant?.title || 'Event',
-              color: 'bg-sky-500',
+              label: isBuffer ? 'Buffer Time' : (slot.occupant?.title || 'Event'),
+              color: isBuffer ? 'bg-gray-400' : 'bg-sky-500',
               start: toHM(s),
               end: toHM(e),
             } as WeekEvent;

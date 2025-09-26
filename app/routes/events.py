@@ -10,7 +10,7 @@ from ..models import Event, User
 from ..schemas import EventOut, EventCreate, EventUpdate
 from ..auth import get_current_user
 from ..scheduling import CleanScheduler, CleanTimeSlot, AVAILABLE, RESERVED
-t from ..services.scheduler_service import SchedulerService
+from ..services.scheduler_service import SchedulerService
 
 router = APIRouter(tags=["events"])
 

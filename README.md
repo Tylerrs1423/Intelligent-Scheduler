@@ -39,7 +39,7 @@ An AI-powered calendar scheduling system that automatically allocates time for y
 
 ## 🛠️ Technical Architecture
 
-- **Backend**: FastAPI with SQLite database
+- **Backend**: FastAPI with PostgreSQL database
 - **Frontend**: Next.js with TypeScript and Tailwind CSS
 - **Scheduling Engine**: Custom multi-factor scoring algorithm
 - **Real-Time Updates**: WebSocket integration for live calendar updates

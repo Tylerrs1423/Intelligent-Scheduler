@@ -12,6 +12,22 @@ An AI-powered calendar scheduling system that automatically allocates time for y
 
 **The Solution:** AI-FOCO automatically schedules your tasks based on your preferences, sleep schedule, and optimal timing, freeing you to focus on actually doing the work instead of planning when to do it.
 
+## 📊 Visual Architecture
+
+### Scheduler Logic – Scoring System
+
+![Scheduling Flow](./Scheduling_Flow.png)
+
+This diagram illustrates the scoring system and core scheduling workflow for AI-FOCO.  
+It shows how flexible and fixed events are allocated, how the clean scheduler processes slots, and how buffer times are factored into schedule optimization.
+
+### AI-FOCO: Future Technical Architecture
+
+![Foco Architecture](./Foco_Architecture.png)
+
+This diagram shows the planned future architecture for AI-FOCO, including FastAPI backend, PostgreSQL storage, n8n workflow automation, Google Calendar integrations, notification services, and agentic AI scheduling for extensibility.
+
+
 ## ✨ Core Features
 
 ### 🧠 **Intelligent Auto-Scheduling**
